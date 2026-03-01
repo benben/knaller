@@ -1,0 +1,32 @@
+version: 2
+
+builds:
+  - main: ./cmd/knaller
+    binary: knaller
+    goos:
+      - linux
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w
+      - -X github.com/benben/knaller/internal/cli.version={{.Version}}
+      - -X github.com/benben/knaller/internal/cli.commit={{.Commit}}
+      - -X github.com/benben/knaller/internal/cli.date={{.Date}}
+
+archives:
+  - format: tar.gz
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^ci:"
+
+release:
+  github:
+    owner: benben
+    name: knaller
