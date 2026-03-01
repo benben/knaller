@@ -9,24 +9,22 @@ import (
 	"os"
 )
 
-// Config describes a microVM to run. At minimum, Kernel and RootFS must be set.
-// All other fields have sensible defaults (1 vCPU, 128 MiB, auto-generated name,
-// stdin/stdout/stderr connected to the host terminal).
+// Config describes a microVM to start. At minimum, Kernel and RootFS must be
+// set. Knaller starts a Firecracker process, connects to its API socket,
+// configures the VM, and boots it. Interact with the running VM via SSH
+// (the guest IP is returned in VM.GuestIP).
 type Config struct {
-	Name           string    // VM name (auto-generated 8-char hex if empty)
+	Name           string    // VM name (random 8-char hex if empty)
 	Kernel         string    // path to vmlinux kernel image
 	RootFS         string    // path to base rootfs ext4 image (copied per-VM)
 	CPUs           int       // number of vCPUs (default: 1)
-	Memory         int       // memory in MiB (default: 128, minimum: 128)
-	FirecrackerBin string    // path to the firecracker binary (default: "firecracker" from PATH)
-	Stdout         io.Writer // where to send serial console output (default: os.Stdout)
-	Stdin          io.Reader // where to read serial console input (default: os.Stdin)
-	Stderr         io.Writer // where to send firecracker process stderr (default: os.Stderr)
+	Memory         int       // memory in MiB (default: 1024, minimum: 128)
+	FirecrackerBin string    // path to firecracker binary (default: "firecracker")
+	Stdout         io.Writer // serial console log output (default: io.Discard)
+	Stderr         io.Writer // firecracker process stderr (default: io.Discard)
 }
 
 // setDefaults fills in zero-value fields with sensible defaults.
-// It generates a random hex name if none was provided, and connects
-// stdio to the host terminal if not explicitly set.
 func (c *Config) setDefaults() {
 	if c.Name == "" {
 		c.Name = randomName()
@@ -35,19 +33,16 @@ func (c *Config) setDefaults() {
 		c.CPUs = 1
 	}
 	if c.Memory == 0 {
-		c.Memory = 128
+		c.Memory = 1024
 	}
 	if c.FirecrackerBin == "" {
 		c.FirecrackerBin = "firecracker"
 	}
 	if c.Stdout == nil {
-		c.Stdout = os.Stdout
-	}
-	if c.Stdin == nil {
-		c.Stdin = os.Stdin
+		c.Stdout = io.Discard
 	}
 	if c.Stderr == nil {
-		c.Stderr = os.Stderr
+		c.Stderr = io.Discard
 	}
 }
 
@@ -77,7 +72,6 @@ func (c *Config) validate() error {
 }
 
 // randomName generates an 8-character random hex string for use as a VM name.
-// This ensures unique names when the user doesn't specify one.
 func randomName() string {
 	b := make([]byte, 4)
 	rand.Read(b)

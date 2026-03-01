@@ -12,6 +12,8 @@ knaller needs a Linux host with KVM support. Firecracker only runs on Linux (x86
 - **Root access** — needed for creating TAP network devices and mounting rootfs images
 - **Firecracker binary** — download from [Firecracker releases](https://github.com/firecracker-microvm/firecracker/releases)
 - **tun kernel module** — usually loaded by default; if not: `modprobe tun`
+- **SSH server in guest** — the rootfs image must have an SSH server running (e.g. openssh-server)
+- **SSH keypair** — knaller injects your public key (`~/.ssh/id_ed25519.pub`, `id_rsa.pub`, or `id_ecdsa.pub`) into the guest for passwordless `ssh root@<guest-ip>`. Generate one if you don't have one: `ssh-keygen -t ed25519`
 
 ### Host networking setup
 
@@ -55,11 +57,17 @@ Or download a pre-built binary from the [releases page](https://github.com/benbe
 ## CLI Usage
 
 ```bash
-# Start a microVM (interactive serial console, press Ctrl+C to stop)
-sudo knaller run
+# Start a microVM (shows logs, prints SSH connection info)
+sudo knaller start --name myvm
 
 # Start with custom settings
-sudo knaller run --name myvm --cpus 2 --mem 512 --kernel /path/to/vmlinux --rootfs /path/to/rootfs.ext4
+sudo knaller start --name myvm --cpus 2 --mem 2048
+
+# Connect to the VM (from another terminal)
+ssh root@<guest-ip>
+
+# Stop the VM (from another terminal)
+sudo knaller stop --name myvm
 
 # List running VMs
 sudo knaller list
@@ -80,7 +88,7 @@ package main
 
 import (
     "context"
-    "os"
+    "fmt"
 
     "github.com/benben/knaller"
 )
@@ -88,24 +96,33 @@ import (
 func main() {
     ctx := context.Background()
 
-    // Start a microVM (like "docker run")
+    // Start a microVM — knaller handles starting Firecracker,
+    // configuring the VM, and booting it.
     vm, err := knaller.Run(ctx, &knaller.Config{
         Name:   "myvm",
         Kernel: "/path/to/vmlinux",
         RootFS: "/path/to/rootfs.ext4",
         CPUs:   2,
-        Memory: 512,
-        Stdout: os.Stdout,
-        Stdin:  os.Stdin,
+        Memory: 2048,
     })
     if err != nil {
         panic(err)
     }
     defer vm.Cleanup()
 
+    // Connect via SSH at vm.GuestIP
+    fmt.Printf("VM started, SSH to root@%s\n", vm.GuestIP)
+
     // Block until VM exits
     vm.Wait()
 }
+```
+
+### Stopping a VM by name
+
+```go
+// From a different process:
+knaller.StopVM(ctx, "myvm")
 ```
 
 ### Listing VMs
@@ -116,7 +133,7 @@ if err != nil {
     panic(err)
 }
 for _, vm := range vms {
-    fmt.Printf("%s: %s (%d vCPUs, %dMiB, %s)\n",
+    fmt.Printf("%s: %s (%d vCPUs, %dMiB, ssh root@%s)\n",
         vm.Name, vm.Status, vm.CPUs, vm.Memory, vm.GuestIP)
 }
 ```
@@ -128,12 +145,12 @@ For direct access to the Firecracker API (advanced usage):
 ```go
 import "github.com/benben/knaller/firecracker"
 
-client := firecracker.NewClient("/tmp/fc.socket")
+client := firecracker.NewClient("/path/to/firecracker.socket")
 ctx := context.Background()
 
 client.SetBootSource(ctx, &firecracker.BootSource{
     KernelImagePath: "/path/to/vmlinux",
-    BootArgs:        "console=ttyS0 reboot=k panic=1 pci=off",
+    BootArgs:        "console=ttyS0 reboot=k panic=1",
 })
 // ... configure drives, network, etc.
 client.StartInstance(ctx)
@@ -143,11 +160,11 @@ fmt.Println(info.State) // "Running"
 
 client.StopInstance(ctx) // graceful shutdown
 ```
-:
+
 ## How it works
 
 - **Rootfs isolation**: Each VM gets its own copy of the base rootfs at `~/.local/share/knaller/vms/<name>/rootfs.ext4`, using `cp --reflink=auto` for copy-on-write on supported filesystems (btrfs, xfs).
-- **Networking**: TAP devices are created via direct ioctl calls using `golang.org/x/sys/unix` (no `ip` command dependency). Each VM gets a /30 subnet derived deterministically from its name.
+- **Networking**: TAP devices are created via direct ioctl calls using `golang.org/x/sys/unix` (no `ip` command dependency). Each VM gets a /30 subnet derived deterministically from its name. Connect via SSH.
 - **DNS**: The host's DNS servers are auto-configured into the guest's `/etc/resolv.conf` before boot. Works with systemd-resolved, NetworkManager, and static configs.
 - **No state files**: VM discovery uses the Firecracker API directly — the socket's existence IS the state. `knaller list` scans the socket directory and queries each running instance.
-- **Cleanup**: `vm.Cleanup()` removes the TAP device, rootfs copy, and API socket. The CLI does this automatically on Ctrl+C / SIGTERM.
+- **Cleanup**: `vm.Cleanup()` removes the API socket, TAP device, and rootfs copy. The CLI does this automatically on Ctrl+C / SIGTERM.

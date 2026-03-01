@@ -11,10 +11,37 @@ import (
 
 // vmDataDir returns the directory where a VM's data is stored. Each VM gets
 // its own directory at ~/.local/share/knaller/vms/<name>/ which holds the
-// rootfs copy and any other per-VM files.
+// rootfs copy and any other per-VM files. Uses realUserHome() so it works
+// correctly under sudo.
 func vmDataDir(name string) string {
-	home, _ := os.UserHomeDir()
+	home := RealUserHome()
 	return filepath.Join(home, ".local", "share", "knaller", "vms", name)
+}
+
+// RealUserHome returns the home directory of the actual user, even under sudo.
+// When you run "sudo knaller run", os.UserHomeDir() returns /root, but the
+// images and VM data live in the real user's home. We detect this via SUDO_USER.
+func RealUserHome() string {
+	if sudoUser := os.Getenv("SUDO_USER"); sudoUser != "" {
+		if home, err := lookupHome(sudoUser); err == nil {
+			return home
+		}
+	}
+	home, _ := os.UserHomeDir()
+	return home
+}
+
+// lookupHome gets a user's home directory from /etc/passwd via getent.
+func lookupHome(username string) (string, error) {
+	out, err := exec.Command("getent", "passwd", username).Output()
+	if err != nil {
+		return "", err
+	}
+	fields := strings.SplitN(string(out), ":", 7)
+	if len(fields) >= 6 {
+		return fields[5], nil
+	}
+	return "", fmt.Errorf("could not parse home for %s", username)
 }
 
 // prepareDisk copies the base rootfs image to a per-VM directory so each VM
@@ -130,6 +157,75 @@ func resolvedUpstreams() []string {
 		}
 	}
 	return ns
+}
+
+// configureSSH injects the host user's SSH public key into the guest rootfs
+// so the VM is accessible via "ssh root@<guest-ip>" without a password. It
+// also ensures sshd_config allows root login with keys. Searches common key
+// paths (~/.ssh/id_ed25519.pub, id_rsa.pub, etc.) using RealUserHome() so it
+// works under sudo.
+func configureSSH(diskPath string) error {
+	pubKey := findSSHPublicKey()
+	if pubKey == "" {
+		return nil // no key found, skip silently
+	}
+
+	mountDir, err := os.MkdirTemp("", "knaller-mount-")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(mountDir)
+
+	if out, err := exec.Command("mount", diskPath, mountDir).CombinedOutput(); err != nil {
+		return fmt.Errorf("mount rootfs: %s: %w", out, err)
+	}
+	defer exec.Command("umount", mountDir).Run()
+
+	// Write the user's public key to /root/.ssh/authorized_keys.
+	sshDir := filepath.Join(mountDir, "root", ".ssh")
+	if err := os.MkdirAll(sshDir, 0o700); err != nil {
+		return err
+	}
+	if err := os.WriteFile(filepath.Join(sshDir, "authorized_keys"), []byte(pubKey+"\n"), 0o600); err != nil {
+		return err
+	}
+
+	// Ensure sshd allows root login with keys. Without this, many distro
+	// images default to PermitRootLogin=prohibit-password or no.
+	sshdConfig := filepath.Join(mountDir, "etc", "ssh", "sshd_config")
+	if data, err := os.ReadFile(sshdConfig); err == nil {
+		config := string(data)
+		// Replace any existing PermitRootLogin line, or append if not found.
+		if strings.Contains(config, "PermitRootLogin") {
+			lines := strings.Split(config, "\n")
+			for i, line := range lines {
+				trimmed := strings.TrimSpace(line)
+				if strings.HasPrefix(trimmed, "PermitRootLogin") || strings.HasPrefix(trimmed, "#PermitRootLogin") {
+					lines[i] = "PermitRootLogin yes"
+				}
+			}
+			config = strings.Join(lines, "\n")
+		} else {
+			config += "\nPermitRootLogin yes\n"
+		}
+		os.WriteFile(sshdConfig, []byte(config), 0o644)
+	}
+
+	return nil
+}
+
+// findSSHPublicKey looks for the host user's SSH public key. It checks common
+// key filenames in order of preference. Returns the key content or empty string.
+func findSSHPublicKey() string {
+	home := RealUserHome()
+	keyNames := []string{"id_ed25519.pub", "id_rsa.pub", "id_ecdsa.pub"}
+	for _, name := range keyNames {
+		data, err := os.ReadFile(filepath.Join(home, ".ssh", name))
+		if err == nil {
+			return strings.TrimSpace(string(data))
+		}
+	}
+	return ""
 }
 
 // removeDisk deletes the per-VM data directory including the rootfs copy.

@@ -3,8 +3,10 @@
 ## What is this?
 
 knaller is a Go library and CLI that makes it simple to run Firecracker microVMs.
-It provides a high-level API (`knaller.Run`, `knaller.List`, `vm.Stop`, `vm.Cleanup`)
-that abstracts away the low-level Firecracker socket API. There's also a low-level
+It starts a Firecracker process for each VM, connects to its API socket, configures
+the VM, and boots it. VMs are non-interactive — connect via SSH. It provides a
+high-level API (`knaller.Run`, `knaller.List`, `knaller.StopVM`, `vm.Cleanup`) that
+abstracts away the low-level Firecracker socket API. There's also a low-level
 `firecracker` sub-package for direct API access.
 
 ## Project layout
@@ -21,16 +23,21 @@ knaller/
   cmd/knaller/
     main.go          CLI binary entry point + subcommand dispatch
   internal/cli/
-    run.go           "knaller run" subcommand
+    start.go         "knaller start" subcommand (non-interactive, SSH access)
+    stop.go          "knaller stop" subcommand
     list.go          "knaller list" subcommand
     version.go       "knaller version" subcommand (version set via ldflags)
 ```
 
 ## Key design decisions
 
-- **No state files.** VM discovery is done by scanning a socket directory
-  (`$XDG_RUNTIME_DIR/knaller/` or `/tmp/knaller/`) and querying each Firecracker
-  instance via its API. The socket's existence IS the state.
+- **No state files.** VM discovery is done by scanning the socket directory
+  (`~/.local/share/knaller/sockets/`) and querying each Firecracker instance via
+  its API. The socket's existence IS the state.
+
+- **SSH access only.** VMs don't have an interactive serial console. Firecracker's
+  stdin is not connected. Use SSH to interact with the guest. The guest IP is
+  printed on start and available via `knaller list`.
 
 - **Pure Go networking.** TAP devices are created using ioctl syscalls via
   `golang.org/x/sys/unix`. No shelling out to `ip` or `brctl`.
@@ -47,9 +54,13 @@ knaller/
   using the host's DNS servers. We skip localhost entries (systemd-resolved stub)
   and fall back to `resolvectl dns` output or 1.1.1.1/8.8.8.8.
 
+- **One Firecracker process per VM.** Firecracker is not a daemon — each process is
+  exactly one VM with one API socket. Knaller starts a new Firecracker process for
+  each `Run()` call and manages its lifecycle.
+
 - **Cleanup is explicit.** Call `vm.Cleanup()` after `vm.Wait()` returns. This removes
-  the TAP device, rootfs copy, and API socket. If you forget, TAP devices and disk
-  copies will leak. The CLI handles this automatically via signal handlers.
+  the API socket, TAP device, and rootfs copy. If you forget, sockets, TAP devices,
+  and disk copies will leak. The CLI handles this automatically via signal handlers.
 
 ## Building
 

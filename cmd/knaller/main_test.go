@@ -32,15 +32,27 @@ func TestDispatchUnknownCommand(t *testing.T) {
 }
 
 func TestDispatchList(t *testing.T) {
-	// List with no running VMs should succeed and just print the table header.
 	if err := dispatch([]string{"list"}); err != nil {
 		t.Fatalf("dispatch list: %v", err)
 	}
 }
 
 func TestDispatchLsAlias(t *testing.T) {
-	// "ls" should work the same as "list".
 	if err := dispatch([]string{"ls"}); err != nil {
 		t.Fatalf("dispatch ls: %v", err)
+	}
+}
+
+func TestDispatchStartMissingName(t *testing.T) {
+	err := dispatch([]string{"start"})
+	if err == nil {
+		t.Fatal("expected error for start without --name")
+	}
+}
+
+func TestDispatchStopMissingName(t *testing.T) {
+	err := dispatch([]string{"stop"})
+	if err == nil {
+		t.Fatal("expected error for stop without --name")
 	}
 }

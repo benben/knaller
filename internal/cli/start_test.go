@@ -3,6 +3,7 @@ package cli
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -19,8 +20,18 @@ func TestDefaultPaths(t *testing.T) {
 	}
 }
 
-func TestRunMissingKernel(t *testing.T) {
-	err := Run([]string{"--kernel", "/nonexistent/vmlinux", "--rootfs", "/tmp"})
+func TestStartMissingName(t *testing.T) {
+	err := Start([]string{"--kernel", "/tmp", "--rootfs", "/tmp"})
+	if err == nil {
+		t.Fatal("expected error for missing name")
+	}
+	if !strings.Contains(err.Error(), "--name is required") {
+		t.Errorf("error = %q, want --name is required", err.Error())
+	}
+}
+
+func TestStartMissingKernel(t *testing.T) {
+	err := Start([]string{"--name", "test", "--kernel", "/nonexistent/vmlinux", "--rootfs", "/tmp"})
 	if err == nil {
 		t.Fatal("expected error for missing kernel")
 	}

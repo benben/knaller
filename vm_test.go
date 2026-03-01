@@ -11,14 +11,20 @@ import (
 	"github.com/benben/knaller/firecracker"
 )
 
-func TestListEmptyDir(t *testing.T) {
+// setTestHome overrides HOME (and clears SUDO_USER) so socketDirectory()
+// and vmDataDir() use a temp directory. Returns a cleanup function.
+func setTestHome(t *testing.T) string {
+	t.Helper()
 	dir := t.TempDir()
-	orig := os.Getenv("XDG_RUNTIME_DIR")
-	os.Setenv("XDG_RUNTIME_DIR", dir)
-	defer os.Setenv("XDG_RUNTIME_DIR", orig)
+	t.Setenv("HOME", dir)
+	t.Setenv("SUDO_USER", "")
+	// Create the sockets dir so List() finds it.
+	os.MkdirAll(filepath.Join(dir, ".local", "share", "knaller", "sockets"), 0o755)
+	return filepath.Join(dir, ".local", "share", "knaller", "sockets")
+}
 
-	// Create the knaller subdir but leave it empty
-	os.MkdirAll(filepath.Join(dir, "knaller"), 0o755)
+func TestListEmptyDir(t *testing.T) {
+	setTestHome(t)
 
 	vms, err := List()
 	if err != nil {
@@ -31,9 +37,9 @@ func TestListEmptyDir(t *testing.T) {
 
 func TestListNoDir(t *testing.T) {
 	dir := t.TempDir()
-	orig := os.Getenv("XDG_RUNTIME_DIR")
-	os.Setenv("XDG_RUNTIME_DIR", filepath.Join(dir, "nonexistent"))
-	defer os.Setenv("XDG_RUNTIME_DIR", orig)
+	t.Setenv("HOME", dir)
+	t.Setenv("SUDO_USER", "")
+	// Don't create the sockets dir — List() should handle missing dir.
 
 	vms, err := List()
 	if err != nil {
@@ -45,13 +51,7 @@ func TestListNoDir(t *testing.T) {
 }
 
 func TestListWithMockSocket(t *testing.T) {
-	dir := t.TempDir()
-	socketDir := filepath.Join(dir, "knaller")
-	os.MkdirAll(socketDir, 0o755)
-
-	orig := os.Getenv("XDG_RUNTIME_DIR")
-	os.Setenv("XDG_RUNTIME_DIR", dir)
-	defer os.Setenv("XDG_RUNTIME_DIR", orig)
+	socketDir := setTestHome(t)
 
 	// Create a mock Firecracker server
 	socketPath := filepath.Join(socketDir, "testvm.socket")
@@ -115,13 +115,7 @@ func TestListWithMockSocket(t *testing.T) {
 }
 
 func TestListStaleSocket(t *testing.T) {
-	dir := t.TempDir()
-	socketDir := filepath.Join(dir, "knaller")
-	os.MkdirAll(socketDir, 0o755)
-
-	orig := os.Getenv("XDG_RUNTIME_DIR")
-	os.Setenv("XDG_RUNTIME_DIR", dir)
-	defer os.Setenv("XDG_RUNTIME_DIR", orig)
+	socketDir := setTestHome(t)
 
 	// Create a stale socket file (regular file, no listener)
 	os.WriteFile(filepath.Join(socketDir, "stale.socket"), nil, 0o644)

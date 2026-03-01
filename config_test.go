@@ -1,6 +1,7 @@
 package knaller
 
 import (
+	"io"
 	"os"
 	"path/filepath"
 	"testing"
@@ -19,20 +20,17 @@ func TestConfigDefaults(t *testing.T) {
 	if cfg.CPUs != 1 {
 		t.Errorf("CPUs = %d, want 1", cfg.CPUs)
 	}
-	if cfg.Memory != 128 {
-		t.Errorf("Memory = %d, want 128", cfg.Memory)
+	if cfg.Memory != 1024 {
+		t.Errorf("Memory = %d, want 1024", cfg.Memory)
 	}
 	if cfg.FirecrackerBin != "firecracker" {
 		t.Errorf("FirecrackerBin = %q, want firecracker", cfg.FirecrackerBin)
 	}
-	if cfg.Stdout != os.Stdout {
-		t.Error("expected Stdout = os.Stdout")
+	if cfg.Stdout != io.Discard {
+		t.Error("expected Stdout = io.Discard")
 	}
-	if cfg.Stdin != os.Stdin {
-		t.Error("expected Stdin = os.Stdin")
-	}
-	if cfg.Stderr != os.Stderr {
-		t.Error("expected Stderr = os.Stderr")
+	if cfg.Stderr != io.Discard {
+		t.Error("expected Stderr = io.Discard")
 	}
 }
 
