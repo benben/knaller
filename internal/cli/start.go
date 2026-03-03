@@ -24,6 +24,8 @@ func Start(args []string) error {
 	cpus := fs.Int("cpus", 1, "Number of vCPUs")
 	mem := fs.Int("mem", 1024, "Memory in MiB")
 	fcBin := fs.String("firecracker", "firecracker", "Firecracker binary path")
+	pastaBin := fs.String("pasta", "pasta", "pasta binary path")
+	verbose := fs.Bool("verbose", false, "Show serial console and process output")
 	fs.Parse(args)
 
 	if *name == "" {
@@ -37,6 +39,11 @@ func Start(args []string) error {
 		CPUs:           *cpus,
 		Memory:         *mem,
 		FirecrackerBin: *fcBin,
+		PastaBin:       *pastaBin,
+	}
+	if *verbose {
+		cfg.Stdout = os.Stdout
+		cfg.Stderr = os.Stderr
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -49,7 +56,7 @@ func Start(args []string) error {
 
 	// Print connection info so the user knows how to reach the VM.
 	fmt.Fprintf(os.Stderr, "\nVM %q started (%d vCPUs, %d MiB)\n", vm.Name, vm.CPUs, vm.Memory)
-	fmt.Fprintf(os.Stderr, "  ssh root@%s\n", vm.GuestIP)
+	fmt.Fprintf(os.Stderr, "  ssh -p %d root@localhost\n", vm.SSHPort)
 	fmt.Fprintf(os.Stderr, "  Press Ctrl+C to stop\n\n")
 
 	// Catch Ctrl+C and SIGTERM to gracefully shut down the VM before exiting.
@@ -65,17 +72,16 @@ func Start(args []string) error {
 	// Block until the Firecracker process exits (guest shut down or killed).
 	vm.Wait()
 
-	// Clean up all resources: socket, TAP device, rootfs copy.
+	// Clean up all resources: socket, rootfs copy.
 	vm.Cleanup()
 	fmt.Fprintln(os.Stderr, "VM stopped and cleaned up.")
 	return nil
 }
 
 // defaultPaths returns the default kernel and rootfs paths under
-// ~/.local/share/knaller/. Uses knaller.RealUserHome() so it resolves to the
-// actual user's home even when running under sudo.
+// ~/.local/share/knaller/.
 func defaultPaths() (kernel, rootfs string) {
-	home := knaller.RealUserHome()
+	home, _ := os.UserHomeDir()
 	base := filepath.Join(home, ".local", "share", "knaller")
 	return filepath.Join(base, "vmlinux"), filepath.Join(base, "rootfs.ext4")
 }

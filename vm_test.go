@@ -11,13 +11,12 @@ import (
 	"github.com/benben/knaller/firecracker"
 )
 
-// setTestHome overrides HOME (and clears SUDO_USER) so socketDirectory()
-// and vmDataDir() use a temp directory. Returns a cleanup function.
+// setTestHome overrides HOME so socketDirectory() and vmDataDir() use a temp
+// directory. Returns the sockets directory path.
 func setTestHome(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
 	t.Setenv("HOME", dir)
-	t.Setenv("SUDO_USER", "")
 	// Create the sockets dir so List() finds it.
 	os.MkdirAll(filepath.Join(dir, ".local", "share", "knaller", "sockets"), 0o755)
 	return filepath.Join(dir, ".local", "share", "knaller", "sockets")
@@ -38,7 +37,6 @@ func TestListEmptyDir(t *testing.T) {
 func TestListNoDir(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("HOME", dir)
-	t.Setenv("SUDO_USER", "")
 	// Don't create the sockets dir — List() should handle missing dir.
 
 	vms, err := List()
@@ -71,7 +69,7 @@ func TestListWithMockSocket(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(firecracker.VMConfig{
 			BootSource: &firecracker.BootSource{
-				BootArgs: "console=ttyS0 ip=172.16.0.2::172.16.0.1:255.255.255.252::eth0:off",
+				BootArgs: "reboot=k panic=1 net.ifnames=0 ip=172.16.0.2::172.16.0.1:255.255.255.252::eth0:off",
 			},
 			MachineConfig: &firecracker.MachineConfig{
 				VcpuCount:  2,
@@ -135,15 +133,15 @@ func TestParseGuestIP(t *testing.T) {
 		want     string
 	}{
 		{
-			"console=ttyS0 ip=172.16.0.2::172.16.0.1:255.255.255.252::eth0:off",
+			"reboot=k panic=1 net.ifnames=0 ip=172.16.0.2::172.16.0.1:255.255.255.252::eth0:off",
 			"172.16.0.2",
 		},
 		{
-			"console=ttyS0 reboot=k",
+			"reboot=k panic=1",
 			"",
 		},
 		{
-			"ip=10.0.0.5::10.0.0.1:255.255.255.0::eth0:off console=ttyS0",
+			"ip=10.0.0.5::10.0.0.1:255.255.255.0::eth0:off reboot=k",
 			"10.0.0.5",
 		},
 	}

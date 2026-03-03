@@ -71,10 +71,33 @@ func TestNetworkConfigBootArgsIP(t *testing.T) {
 		HostIP:  net.IPv4(172, 16, 0, 1),
 		GuestIP: net.IPv4(172, 16, 0, 2),
 	}
-	got := nc.bootArgsIP()
+
+	// No DNS servers.
+	got := nc.bootArgsIP(nil)
 	want := "ip=172.16.0.2::172.16.0.1:255.255.255.252::eth0:off"
 	if got != want {
-		t.Errorf("bootArgsIP() = %q, want %q", got, want)
+		t.Errorf("bootArgsIP(nil) = %q, want %q", got, want)
+	}
+
+	// One DNS server.
+	got = nc.bootArgsIP([]string{"1.1.1.1"})
+	want = "ip=172.16.0.2::172.16.0.1:255.255.255.252::eth0:off:1.1.1.1"
+	if got != want {
+		t.Errorf("bootArgsIP([1.1.1.1]) = %q, want %q", got, want)
+	}
+
+	// Two DNS servers.
+	got = nc.bootArgsIP([]string{"1.1.1.1", "8.8.8.8"})
+	want = "ip=172.16.0.2::172.16.0.1:255.255.255.252::eth0:off:1.1.1.1:8.8.8.8"
+	if got != want {
+		t.Errorf("bootArgsIP([1.1.1.1, 8.8.8.8]) = %q, want %q", got, want)
+	}
+
+	// More than two DNS servers — only first two used.
+	got = nc.bootArgsIP([]string{"1.1.1.1", "8.8.8.8", "9.9.9.9"})
+	want = "ip=172.16.0.2::172.16.0.1:255.255.255.252::eth0:off:1.1.1.1:8.8.8.8"
+	if got != want {
+		t.Errorf("bootArgsIP([3 servers]) = %q, want %q", got, want)
 	}
 }
 
@@ -97,5 +120,89 @@ func TestIPAllocation(t *testing.T) {
 	g := guestIP.To4()
 	if h[0] != g[0] || h[1] != g[1] || h[2] != g[2] || h[3]+1 != g[3] {
 		t.Errorf("IPs not adjacent: host=%s, guest=%s", hostIP, guestIP)
+	}
+}
+
+func TestDeriveNetwork(t *testing.T) {
+	nc := deriveNetwork("myvm")
+
+	if nc.TAPDevice != "kn-myvm" {
+		t.Errorf("TAPDevice = %q, want %q", nc.TAPDevice, "kn-myvm")
+	}
+	if nc.HostIP.To4() == nil {
+		t.Error("HostIP is not valid IPv4")
+	}
+	if nc.GuestIP.To4() == nil {
+		t.Error("GuestIP is not valid IPv4")
+	}
+	if !strings.HasPrefix(nc.GuestMAC, "AA:FC:00:") {
+		t.Errorf("GuestMAC %q doesn't have expected prefix", nc.GuestMAC)
+	}
+
+	// Host and guest should be adjacent in a /30
+	h := nc.HostIP.To4()
+	g := nc.GuestIP.To4()
+	if h[3]+1 != g[3] {
+		t.Errorf("IPs not adjacent: host=%s, guest=%s", nc.HostIP, nc.GuestIP)
+	}
+
+	// SSHPort should be in range 10000-59999
+	if nc.SSHPort < 10000 || nc.SSHPort >= 60000 {
+		t.Errorf("SSHPort = %d, want 10000-59999", nc.SSHPort)
+	}
+
+	// Should be deterministic
+	nc2 := deriveNetwork("myvm")
+	if nc.TAPDevice != nc2.TAPDevice || !nc.HostIP.Equal(nc2.HostIP) ||
+		!nc.GuestIP.Equal(nc2.GuestIP) || nc.GuestMAC != nc2.GuestMAC ||
+		nc.SSHPort != nc2.SSHPort {
+		t.Error("deriveNetwork not deterministic")
+	}
+}
+
+func TestSSHPort(t *testing.T) {
+	// Should be deterministic
+	p1 := sshPort("myvm")
+	p2 := sshPort("myvm")
+	if p1 != p2 {
+		t.Errorf("sshPort not deterministic: %d != %d", p1, p2)
+	}
+
+	// Should be in range 10000-59999
+	if p1 < 10000 || p1 >= 60000 {
+		t.Errorf("sshPort(%q) = %d, want 10000-59999", "myvm", p1)
+	}
+
+	// Different names should (usually) produce different ports
+	p3 := sshPort("other")
+	if p1 == p3 {
+		t.Log("warning: different names produced same SSH port (unlikely but possible)")
+	}
+}
+
+func TestNamespaceSetupScript(t *testing.T) {
+	nc := &networkConfig{
+		TAPDevice: "kn-myvm",
+		HostIP:    net.IPv4(172, 16, 0, 1),
+		GuestIP:   net.IPv4(172, 16, 0, 2),
+		GuestMAC:  "AA:FC:00:01:02:03",
+	}
+
+	script := namespaceSetupScript(nc, "/usr/bin/firecracker", "/tmp/test.socket")
+
+	// Should contain all expected commands
+	expects := []string{
+		"ip tuntap add dev kn-myvm mode tap",
+		"ip addr add 172.16.0.1/30 dev kn-myvm",
+		"ip link set kn-myvm up",
+		"sysctl -qw net.ipv4.ip_forward=1",
+		"dnat to 172.16.0.2",
+		"masquerade",
+		"exec /usr/bin/firecracker --api-sock /tmp/test.socket --enable-pci",
+	}
+	for _, want := range expects {
+		if !strings.Contains(script, want) {
+			t.Errorf("script missing %q\ngot: %s", want, script)
+		}
 	}
 }

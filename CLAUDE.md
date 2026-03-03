@@ -15,8 +15,10 @@ abstracts away the low-level Firecracker socket API. There's also a low-level
 knaller/
   vm.go              High-level API: Run(), List(), VM type
   config.go          Config struct with defaults and validation
-  network.go         TAP device creation/teardown via ioctl (no ip command)
-  disk.go            Per-VM rootfs copy management + DNS auto-config
+  network.go         Network config derivation + pasta namespace setup script
+  disk.go            Per-VM rootfs copy management + host DNS detection
+  Containerfile_guest Guest rootfs container definition (Ubuntu + sshd + systemd)
+  Makefile           Build targets: build, test, create-guest
   firecracker/
     client.go        Low-level HTTP-over-Unix-socket Firecracker API client
     models.go        Firecracker API types (BootSource, Drive, etc.)
@@ -39,28 +41,28 @@ knaller/
   stdin is not connected. Use SSH to interact with the guest. The guest IP is
   printed on start and available via `knaller list`.
 
-- **Pure Go networking.** TAP devices are created using ioctl syscalls via
-  `golang.org/x/sys/unix`. No shelling out to `ip` or `brctl`.
-
-- **Persistent TAP devices.** We use TUNSETPERSIST so Firecracker can open the TAP
-  by name. Our process creates the TAP, marks it persistent, closes the fd, and
-  Firecracker opens it independently. Cleanup reverses this: reopen, clear persist, close.
+- **Rootless networking via pasta.** Each VM runs inside a pasta network namespace
+  (from the passt project). pasta creates a user+network namespace with a TAP device
+  and provides L2↔L4 translation to the host — all without root privileges. Inside
+  the namespace, a second TAP device is created for Firecracker's guest NIC using
+  `ip tuntap` (works because we have CAP_NET_ADMIN within the namespace).
 
 - **Per-VM rootfs copies.** Each VM gets its own copy of the base rootfs at
   `~/.local/share/knaller/vms/<name>/rootfs.ext4`, using `cp --reflink=auto`
   for copy-on-write when the filesystem supports it.
 
-- **Auto DNS.** Before booting, we mount the rootfs copy and write /etc/resolv.conf
-  using the host's DNS servers. We skip localhost entries (systemd-resolved stub)
-  and fall back to `resolvectl dns` output or 1.1.1.1/8.8.8.8.
+- **Auto DNS via kernel boot args.** DNS servers are passed to the guest via the
+  kernel `ip=` boot parameter. The guest rootfs symlinks `/etc/resolv.conf` →
+  `/proc/net/pnp` where the kernel writes them. Host DNS detection skips localhost
+  entries (systemd-resolved stub) and falls back to `resolvectl dns` or 1.1.1.1/8.8.8.8.
 
 - **One Firecracker process per VM.** Firecracker is not a daemon — each process is
   exactly one VM with one API socket. Knaller starts a new Firecracker process for
   each `Run()` call and manages its lifecycle.
 
 - **Cleanup is explicit.** Call `vm.Cleanup()` after `vm.Wait()` returns. This removes
-  the API socket, TAP device, and rootfs copy. If you forget, sockets, TAP devices,
-  and disk copies will leak. The CLI handles this automatically via signal handlers.
+  the API socket and rootfs copy. Network namespace cleanup is automatic when the
+  pasta process exits. The CLI handles this automatically via signal handlers.
 
 ## Building
 
@@ -93,22 +95,17 @@ from commit messages, and creates a GitHub release.
 
 ## External dependencies
 
-- `golang.org/x/sys/unix` — TAP ioctl constants and types (quasi-stdlib from the Go team)
-- No other external dependencies
+- No external Go dependencies (only stdlib)
 
 ## Requirements for running VMs
 
 - Linux with KVM (`/dev/kvm`)
-- Root access (TAP devices, mounting rootfs)
-- `tun` kernel module loaded (`modprobe tun`)
-- IP forwarding enabled: `sysctl -w net.ipv4.ip_forward=1`
-- iptables NAT rules for guest internet access (see README)
+- pasta binary (from the passt project) — rootless networking
 - Firecracker binary (linux/amd64 or linux/arm64)
+- No root privileges required
 
 ## Common issues
 
-- **"Resource busy" when Firecracker starts:** The TAP device fd was not closed before
-  Firecracker tried to open it. This was fixed by using TUNSETPERSIST.
 - **Guest DNS doesn't work:** The host's /etc/resolv.conf pointed to 127.0.0.53
   (systemd-resolved). We detect this and use `resolvectl dns` to find real upstreams.
 - **apt interactive prompts in guest:** Use `DEBIAN_FRONTEND=noninteractive` and

@@ -9,41 +9,26 @@ knaller needs a Linux host with KVM support. Firecracker only runs on Linux (x86
 ### System requirements
 
 - **Linux with KVM** — `/dev/kvm` must be accessible
-- **Root access** — needed for creating TAP network devices and mounting rootfs images
 - **Firecracker binary** — download from [Firecracker releases](https://github.com/firecracker-microvm/firecracker/releases)
-- **tun kernel module** — usually loaded by default; if not: `modprobe tun`
-- **SSH server in guest** — the rootfs image must have an SSH server running (e.g. openssh-server)
-- **SSH keypair** — knaller injects your public key (`~/.ssh/id_ed25519.pub`, `id_rsa.pub`, or `id_ecdsa.pub`) into the guest for passwordless `ssh root@<guest-ip>`. Generate one if you don't have one: `ssh-keygen -t ed25519`
+- **pasta** (from [passt](https://passt.top/)) — provides rootless networking via user/network namespaces
+- **Podman** — needed to build the guest rootfs image (`make create-guest`)
 
-### Host networking setup
+### Guest rootfs
 
-For VMs to reach the internet, the host must forward packets and NAT the VM traffic. This only needs to be done once:
+Build the guest rootfs image using the included Containerfile:
 
 ```bash
-# Enable IP forwarding so the host routes packets between the VM and the internet.
-sudo sysctl -w net.ipv4.ip_forward=1
-
-# NAT traffic from VMs (172.16.0.0/12) to the internet.
-# Replace "eth0" with your actual internet-facing interface (check with: ip route | grep default).
-sudo iptables -t nat -A POSTROUTING -o eth0 -s 172.16.0.0/12 -j MASQUERADE
-
-# Allow forwarded traffic to/from VM TAP devices (named kn-*).
-sudo iptables -A FORWARD -i kn-+ -j ACCEPT
-sudo iptables -A FORWARD -o kn-+ -m state --state RELATED,ESTABLISHED -j ACCEPT
+# Build the rootfs (creates ~/.local/share/knaller/rootfs.ext4)
+make create-guest
 ```
 
-### Guest images
+This builds an Ubuntu container with openssh-server and systemd, exports it to an ext4 image. The guest is pre-configured with root password `root` and DNS via kernel boot args.
 
-Download a Linux kernel and root filesystem for Firecracker:
+You also need a Linux kernel for Firecracker:
 
 ```bash
-mkdir -p ~/.local/share/knaller
-
-# Download kernel
-curl -fsSL -o ~/.local/share/knaller/vmlinux https://s3.amazonaws.com/spec.ccfc.min/img/quickstart_guide/x86_64/kernels/vmlinux.bin
-
-# Download rootfs
-curl -fsSL -o ~/.local/share/knaller/rootfs.ext4 https://s3.amazonaws.com/spec.ccfc.min/img/quickstart_guide/x86_64/rootfs/bionic.rootfs.ext4
+# Download the latest CI kernel matching your Firecracker version
+make download-kernel
 ```
 
 ## Install
@@ -58,22 +43,22 @@ Or download a pre-built binary from the [releases page](https://github.com/benbe
 
 ```bash
 # Start a microVM (shows logs, prints SSH connection info)
-sudo knaller start --name myvm
+knaller start --name myvm
 
 # Start with custom settings
-sudo knaller start --name myvm --cpus 2 --mem 2048
+knaller start --name myvm --cpus 2 --mem 2048
 
-# Connect to the VM (from another terminal)
+# Connect to the VM (from another terminal, password: root)
 ssh root@<guest-ip>
 
 # Stop the VM (from another terminal)
-sudo knaller stop --name myvm
+knaller stop --name myvm
 
 # List running VMs
-sudo knaller list
+knaller list
 
 # List names only
-sudo knaller list -q
+knaller list -q
 
 # Show version
 knaller version
@@ -161,10 +146,23 @@ fmt.Println(info.State) // "Running"
 client.StopInstance(ctx) // graceful shutdown
 ```
 
+## Data directory
+
+All knaller data lives under `~/.local/share/knaller/`:
+
+```
+~/.local/share/knaller/
+  vmlinux              Kernel image
+  rootfs.ext4          Base rootfs image (built by make create-guest)
+  sockets/             API sockets for running VMs (one per VM)
+  vms/<name>/          Per-VM data directories
+    rootfs.ext4        VM's own rootfs copy (copy-on-write)
+```
+
 ## How it works
 
+- **Rootless networking via pasta**: Each VM runs inside a pasta network namespace. pasta (from the passt project) creates a user+network namespace with a TAP device and provides L2/L4 translation to the host — all without root. Inside the namespace, a second TAP is created for Firecracker's guest NIC.
 - **Rootfs isolation**: Each VM gets its own copy of the base rootfs at `~/.local/share/knaller/vms/<name>/rootfs.ext4`, using `cp --reflink=auto` for copy-on-write on supported filesystems (btrfs, xfs).
-- **Networking**: TAP devices are created via direct ioctl calls using `golang.org/x/sys/unix` (no `ip` command dependency). Each VM gets a /30 subnet derived deterministically from its name. Connect via SSH.
-- **DNS**: The host's DNS servers are auto-configured into the guest's `/etc/resolv.conf` before boot. Works with systemd-resolved, NetworkManager, and static configs.
+- **DNS**: The host's DNS servers are passed via kernel boot args (`ip=` parameter). The guest's `/etc/resolv.conf` symlinks to `/proc/net/pnp` where the kernel writes them. Works with systemd-resolved, NetworkManager, and static configs.
 - **No state files**: VM discovery uses the Firecracker API directly — the socket's existence IS the state. `knaller list` scans the socket directory and queries each running instance.
-- **Cleanup**: `vm.Cleanup()` removes the API socket, TAP device, and rootfs copy. The CLI does this automatically on Ctrl+C / SIGTERM.
+- **Cleanup**: `vm.Cleanup()` removes the API socket and rootfs copy. The network namespace is cleaned up automatically when pasta exits. The CLI handles this automatically on Ctrl+C / SIGTERM.

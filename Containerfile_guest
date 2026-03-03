@@ -1,0 +1,23 @@
+FROM docker.io/library/ubuntu:26.04
+
+RUN apt-get update && \
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+        openssh-server \
+        systemd \
+        systemd-sysv \
+    && rm -rf /var/lib/apt/lists/*
+
+# Root password for SSH access.
+RUN echo 'root:root' | chpasswd
+
+# Allow root login via SSH.
+RUN sed -i 's/^#*PermitRootLogin.*/PermitRootLogin yes/' /etc/ssh/sshd_config
+
+# DNS via kernel boot args: the kernel writes nameservers from the ip= boot
+# parameter to /proc/net/pnp, so we symlink resolv.conf there.
+# We can't rm /etc/resolv.conf during build (Podman bind-mounts it), so we
+# use a systemd-tmpfiles rule to create the symlink on first boot.
+RUN echo 'L+ /etc/resolv.conf - - - - /proc/net/pnp' > /etc/tmpfiles.d/resolv.conf
+
+# Ensure sshd host keys are generated on first boot.
+RUN systemctl enable ssh

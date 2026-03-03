@@ -32,15 +32,16 @@ func List(args []string) error {
 	}
 
 	w := tabwriter.NewWriter(os.Stdout, 4, 8, 4, ' ', 0)
-	fmt.Fprintln(w, "NAME\tSTATUS\tVCPUS\tMEMORY\tIP\tPID\tAGE")
+	fmt.Fprintln(w, "NAME\tSTATUS\tVCPUS\tMEMORY\tSSH\tPID\tAGE")
 	for _, vm := range vms {
 		age := formatDuration(time.Since(vm.StartedAt))
 		pid := ""
 		if vm.PID > 0 {
 			pid = fmt.Sprintf("%d", vm.PID)
 		}
+		ssh := fmt.Sprintf("localhost:%d", vm.SSHPort)
 		fmt.Fprintf(w, "%s\t%s\t%d\t%dMiB\t%s\t%s\t%s\n",
-			vm.Name, vm.Status, vm.CPUs, vm.Memory, vm.GuestIP, pid, age)
+			vm.Name, vm.Status, vm.CPUs, vm.Memory, ssh, pid, age)
 	}
 	w.Flush()
 	return nil

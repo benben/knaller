@@ -1,12 +1,13 @@
 // Package knaller provides a high-level Go API for running Firecracker microVMs.
 //
-// Knaller starts a Firecracker process for each VM, connects to its API socket,
-// configures the VM (kernel, rootfs, network, CPU/memory), and boots it. Each
-// VM gets its own rootfs copy, TAP network device, and DNS configuration.
+// Knaller starts Firecracker inside a pasta network namespace for each VM,
+// connects to its API socket, configures the VM (kernel, rootfs, network,
+// CPU/memory), and boots it. Each VM gets its own rootfs copy, network namespace
+// with a TAP device, and DNS configuration — all without requiring root.
 //
 // The main entry points are Run (to start and boot a VM) and List (to discover
-// running VMs). Call Cleanup() when done to release all resources (Firecracker
-// process, TAP device, rootfs copy, API socket).
+// running VMs). Call Cleanup() when done to release resources (rootfs copy, API
+// socket). Network namespace cleanup is automatic when the pasta process exits.
 package knaller
 
 import (
@@ -23,8 +24,9 @@ import (
 )
 
 // VM represents a running Firecracker microVM. It holds references to all the
-// resources knaller created: the Firecracker process, TAP network device, rootfs
-// copy, and API socket. Call Cleanup() when done to release everything.
+// resources knaller created: the pasta+Firecracker process, rootfs copy, and
+// API socket. Call Cleanup() when done to release resources. The network
+// namespace is cleaned up automatically when the pasta process exits.
 type VM struct {
 	Name       string
 	PID        int
@@ -34,20 +36,27 @@ type VM struct {
 	CPUs       int
 	Memory     int
 	GuestIP    string
+	SSHPort    int
 
 	// Private fields for managing the VM's resources.
 	cmd      *exec.Cmd
 	client   *firecracker.Client
-	net      *networkConfig
 	diskPath string
 }
 
-// Run starts a Firecracker microVM. It:
+// Run starts a Firecracker microVM inside a pasta network namespace. It:
 //  1. Copies the base rootfs to a per-VM directory (for write isolation)
-//  2. Writes DNS config into the rootfs copy from the host's resolv.conf
-//  3. Creates a persistent TAP network device for the VM
-//  4. Starts a Firecracker process with a new API socket
-//  5. Configures and boots the VM via the Firecracker HTTP API
+//  2. Derives network configuration (TAP name, IPs, MAC) from the VM name
+//  3. Starts pasta which creates a network namespace, then runs a shell that
+//     creates a TAP device, sets up IP forwarding/NAT, and exec's Firecracker
+//  4. Configures and boots the VM via the Firecracker HTTP API
+//
+// DNS servers are passed to the guest via kernel boot args (ip= parameter).
+// The guest rootfs should symlink /etc/resolv.conf → /proc/net/pnp for this
+// to work (see Containerfile_guest).
+//
+// No root privileges are required — pasta provides network namespacing and
+// the TAP device is created inside the namespace where we have CAP_NET_ADMIN.
 //
 // If any step fails, all previously created resources are cleaned up automatically.
 // On success, the caller must eventually call Cleanup() to release resources.
@@ -75,9 +84,10 @@ func Run(ctx context.Context, cfg *Config) (*VM, error) {
 		return nil, fmt.Errorf("prepare disk: %w", err)
 	}
 
+	// Derive network configuration from the VM name (pure computation, no syscalls).
+	nc := deriveNetwork(cfg.Name)
+
 	// cleanup tears down all resources created so far if we hit an error.
-	// Each function is nil-safe, so it's fine to call this at any point.
-	var nc *networkConfig
 	var cmd *exec.Cmd
 	cleanup := func() {
 		if cmd != nil && cmd.Process != nil {
@@ -85,43 +95,26 @@ func Run(ctx context.Context, cfg *Config) (*VM, error) {
 			cmd.Wait()
 		}
 		os.Remove(socketPath)
-		removeNetwork(nc)
 		removeDisk(cfg.Name)
 	}
 
-	// Write /etc/resolv.conf into the rootfs copy with the host's DNS servers.
-	// This is done by temporarily mounting the ext4 image, writing the file,
-	// and unmounting. The guest can resolve DNS names immediately after boot.
-	if err := configureDNS(diskPath); err != nil {
-		cleanup()
-		return nil, fmt.Errorf("configure dns: %w", err)
-	}
-
-	// Inject the host user's SSH public key into the rootfs so the VM is
-	// accessible via "ssh root@<guest-ip>" without a password.
-	if err := configureSSH(diskPath); err != nil {
-		cleanup()
-		return nil, fmt.Errorf("configure ssh: %w", err)
-	}
-
-	// Create a TAP device for this VM's network. Each VM gets its own TAP with
-	// a /30 subnet (one host IP, one guest IP). The TAP is marked persistent
-	// so Firecracker can open it by name after we close our file descriptor.
-	nc, err = createNetwork(cfg.Name)
-	if err != nil {
-		cleanup()
-		return nil, fmt.Errorf("create network: %w", err)
-	}
-
-	// Start the Firecracker process. It creates the API socket and waits for
-	// configuration via HTTP. Stdout carries the serial console log output.
-	// Stdin is not connected — interact with the VM via SSH instead.
-	cmd = exec.CommandContext(ctx, cfg.FirecrackerBin, "--api-sock", socketPath, "--enable-pci")
+	// Start pasta which creates a user+network namespace with its own tap0
+	// for outer connectivity. Inside the namespace, a setup script creates a
+	// second TAP for Firecracker's guest NIC, configures IP forwarding, NAT,
+	// and DNAT (so pasta's SSH port forwarding reaches the guest), then exec's
+	// Firecracker. All without root — pasta provides CAP_NET_ADMIN in the namespace.
+	script := namespaceSetupScript(nc, cfg.FirecrackerBin, socketPath)
+	cmd = exec.CommandContext(ctx, cfg.PastaBin,
+		"--config-net",
+		"-t", fmt.Sprintf("%d:22", nc.SSHPort),
+		"-4", "-f",
+		"--",
+		"sh", "-c", script)
 	cmd.Stdout = cfg.Stdout
 	cmd.Stderr = cfg.Stderr
 	if err := cmd.Start(); err != nil {
 		cleanup()
-		return nil, fmt.Errorf("start firecracker: %w", err)
+		return nil, fmt.Errorf("start pasta: %w", err)
 	}
 
 	// Wait for the API socket to appear. Firecracker creates it shortly after
@@ -137,11 +130,11 @@ func Run(ctx context.Context, cfg *Config) (*VM, error) {
 	client := firecracker.NewClient(socketPath)
 
 	// Kernel boot args configure the guest:
-	//   console=ttyS0  — serial console output (shown in the firecracker terminal)
 	//   reboot=k       — reboot on kernel panic instead of halting
 	//   panic=1        — reboot after 1 second on panic
-	//   ip=...         — static IP for the guest (parsed by the kernel at boot)
-	bootArgs := "console=ttyS0 reboot=k panic=1 net.ifnames=0 " + nc.bootArgsIP()
+	//   ip=...         — static IP + DNS for the guest (parsed by the kernel at boot)
+	dns := hostNameservers()
+	bootArgs := "reboot=k panic=1 net.ifnames=0 " + nc.bootArgsIP(dns)
 	if err := client.SetBootSource(ctx, &firecracker.BootSource{
 		KernelImagePath: cfg.Kernel,
 		BootArgs:        bootArgs,
@@ -194,15 +187,15 @@ func Run(ctx context.Context, cfg *Config) (*VM, error) {
 		CPUs:       cfg.CPUs,
 		Memory:     cfg.Memory,
 		GuestIP:    nc.GuestIP.String(),
+		SSHPort:    nc.SSHPort,
 		cmd:        cmd,
 		client:     client,
-		net:        nc,
 		diskPath:   diskPath,
 	}, nil
 }
 
-// Wait blocks until the Firecracker process exits (the guest shut down or was
-// killed). Returns any error from the process exit.
+// Wait blocks until the pasta process exits (which happens when Firecracker
+// exits, since it was exec'd). Returns any error from the process exit.
 func (vm *VM) Wait() error {
 	if vm.cmd == nil {
 		return nil
@@ -217,16 +210,13 @@ func (vm *VM) Stop(ctx context.Context) error {
 }
 
 // Cleanup releases all resources knaller created for this VM: removes the API
-// socket, destroys the TAP network device, and deletes the rootfs copy. Always
-// call this after the VM exits to avoid leaking network interfaces and disk space.
-// Safe to call multiple times.
+// socket and deletes the rootfs copy. The network namespace and TAP device are
+// cleaned up automatically when the pasta process exits. Always call this after
+// the VM exits to avoid leaking disk space. Safe to call multiple times.
 func (vm *VM) Cleanup() error {
 	var errs []error
 	if err := os.Remove(vm.SocketPath); err != nil && !os.IsNotExist(err) {
 		errs = append(errs, fmt.Errorf("remove socket: %w", err))
-	}
-	if err := removeNetwork(vm.net); err != nil {
-		errs = append(errs, fmt.Errorf("remove network: %w", err))
 	}
 	if err := removeDisk(vm.Name); err != nil {
 		errs = append(errs, fmt.Errorf("remove disk: %w", err))
@@ -282,6 +272,7 @@ func List() ([]*VM, error) {
 			Name:       name,
 			SocketPath: socketPath,
 			Status:     info.State,
+			SSHPort:    sshPort(name),
 			client:     client,
 		}
 
@@ -329,9 +320,9 @@ func waitForSocket(path string, timeout time.Duration) error {
 
 // socketDirectory returns the path where VM API sockets are stored:
 // ~/.local/share/knaller/sockets/. This keeps all knaller data in one place.
-// Uses RealUserHome() so it works correctly under sudo.
 func socketDirectory() string {
-	return filepath.Join(RealUserHome(), ".local", "share", "knaller", "sockets")
+	home, _ := os.UserHomeDir()
+	return filepath.Join(home, ".local", "share", "knaller", "sockets")
 }
 
 // parseGuestIP extracts the guest IP from kernel boot args. The kernel ip=
