@@ -24,6 +24,7 @@ func Start(args []string) error {
 	cpus := fs.Int("cpus", 1, "Number of vCPUs")
 	mem := fs.Int("mem", 1024, "Memory in MiB")
 	fcBin := fs.String("firecracker", "firecracker", "Firecracker binary path")
+	bandwidth := fs.Int("bandwidth", 0, "Network bandwidth limit in Mbps per direction (0 = unlimited)")
 	pastaBin := fs.String("pasta", "pasta", "pasta binary path")
 	verbose := fs.Bool("verbose", false, "Show serial console and process output")
 	fs.Parse(args)
@@ -38,6 +39,7 @@ func Start(args []string) error {
 		RootFS:         *rootfs,
 		CPUs:           *cpus,
 		Memory:         *mem,
+		BandwidthMbps:  *bandwidth,
 		FirecrackerBin: *fcBin,
 		PastaBin:       *pastaBin,
 	}
@@ -55,7 +57,11 @@ func Start(args []string) error {
 	}
 
 	// Print connection info so the user knows how to reach the VM.
-	fmt.Fprintf(os.Stderr, "\nVM %q started (%d vCPUs, %d MiB)\n", vm.Name, vm.CPUs, vm.Memory)
+	bw := "unlimited"
+	if *bandwidth > 0 {
+		bw = fmt.Sprintf("%d Mbps", *bandwidth)
+	}
+	fmt.Fprintf(os.Stderr, "\nVM %q started (%d vCPUs, %d MiB, %s)\n", vm.Name, vm.CPUs, vm.Memory, bw)
 	fmt.Fprintf(os.Stderr, "  ssh -p %d root@localhost\n", vm.SSHPort)
 	fmt.Fprintf(os.Stderr, "  Press Ctrl+C to stop\n\n")
 

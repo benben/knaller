@@ -157,11 +157,25 @@ func Run(ctx context.Context, cfg *Config) (*VM, error) {
 		return nil, fmt.Errorf("set drive: %w", err)
 	}
 
-	if err := client.SetNetworkInterface(ctx, &firecracker.NetworkInterface{
+	nic := &firecracker.NetworkInterface{
 		IfaceID:     "eth0",
 		HostDevName: nc.TAPDevice,
 		GuestMAC:    nc.GuestMAC,
-	}); err != nil {
+	}
+	if cfg.BandwidthMbps > 0 {
+		// Convert Mbps to bytes per second: Mbps * 1_000_000 / 8.
+		// The token bucket refills every 1000ms, so size = bytes per second.
+		bytesPerSecond := int64(cfg.BandwidthMbps) * 1_000_000 / 8
+		limiter := &firecracker.RateLimiter{
+			Bandwidth: &firecracker.TokenBucket{
+				Size:         bytesPerSecond,
+				RefillTimeMs: 1000,
+			},
+		}
+		nic.RxRateLimiter = limiter
+		nic.TxRateLimiter = limiter
+	}
+	if err := client.SetNetworkInterface(ctx, nic); err != nil {
 		cleanup()
 		return nil, fmt.Errorf("set network: %w", err)
 	}

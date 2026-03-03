@@ -39,10 +39,31 @@ type MachineConfig struct {
 // guest. IfaceID is an arbitrary name used to identify the interface in the API.
 // HostDevName must be the name of an existing TAP device (e.g. "kn-myvm").
 // GuestMAC is optional; Firecracker generates one if omitted.
+// RxRateLimiter and TxRateLimiter are optional token-bucket rate limiters
+// for inbound and outbound traffic respectively.
 type NetworkInterface struct {
-	IfaceID     string `json:"iface_id"`
-	HostDevName string `json:"host_dev_name"`
-	GuestMAC    string `json:"guest_mac,omitempty"`
+	IfaceID        string       `json:"iface_id"`
+	HostDevName    string       `json:"host_dev_name"`
+	GuestMAC       string       `json:"guest_mac,omitempty"`
+	RxRateLimiter  *RateLimiter `json:"rx_rate_limiter,omitempty"`
+	TxRateLimiter  *RateLimiter `json:"tx_rate_limiter,omitempty"`
+}
+
+// RateLimiter is a Firecracker token-bucket rate limiter. Bandwidth limits the
+// sustained throughput (bytes per refill period). Ops limits the number of I/O
+// operations per refill period. Either or both may be set.
+type RateLimiter struct {
+	Bandwidth *TokenBucket `json:"bandwidth,omitempty"`
+	Ops       *TokenBucket `json:"ops,omitempty"`
+}
+
+// TokenBucket defines a token bucket for rate limiting. Size is the number of
+// tokens (bytes for bandwidth, ops for operations) added every RefillTimeMs
+// milliseconds. OneTimeBurst is an optional initial burst of extra tokens.
+type TokenBucket struct {
+	Size         int64 `json:"size"`
+	OneTimeBurst int64 `json:"one_time_burst,omitempty"`
+	RefillTimeMs int64 `json:"refill_time"`
 }
 
 // Action is a command sent to a running Firecracker instance. The two main

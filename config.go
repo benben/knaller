@@ -19,6 +19,7 @@ type Config struct {
 	RootFS         string    // path to base rootfs ext4 image (copied per-VM)
 	CPUs           int       // number of vCPUs (default: 1)
 	Memory         int       // memory in MiB (default: 1024, minimum: 128)
+	BandwidthMbps  int       // network bandwidth limit in Mbps per direction (0 = unlimited)
 	FirecrackerBin string    // path to firecracker binary (default: "firecracker")
 	PastaBin       string    // path to pasta binary (default: "pasta")
 	Stdout         io.Writer // serial console log output (default: io.Discard)
