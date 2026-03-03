@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"flag"
 	"fmt"
 	"os"
 	"text/tabwriter"
@@ -12,23 +11,11 @@ import (
 
 // List implements the "knaller list" subcommand. It discovers running VMs by
 // scanning the socket directory and querying each Firecracker instance for its
-// configuration. Output is a table with VM name, status, vCPUs, memory, IP,
-// PID, and age. Use -q for quiet mode (names only).
+// configuration.
 func List(args []string) error {
-	fs := flag.NewFlagSet("list", flag.ExitOnError)
-	quiet := fs.Bool("q", false, "Quiet mode (names only)")
-	fs.Parse(args)
-
 	vms, err := knaller.List()
 	if err != nil {
 		return err
-	}
-
-	if *quiet {
-		for _, vm := range vms {
-			fmt.Println(vm.Name)
-		}
-		return nil
 	}
 
 	w := tabwriter.NewWriter(os.Stdout, 4, 8, 4, ' ', 0)

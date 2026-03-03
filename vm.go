@@ -14,6 +14,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -110,8 +111,11 @@ func Run(ctx context.Context, cfg *Config) (*VM, error) {
 		"-4", "-f",
 		"--",
 		"sh", "-c", script)
-	cmd.Stdout = cfg.Stdout
-	cmd.Stderr = cfg.Stderr
+	// Wrap writers so exec.Cmd creates pipes instead of passing file
+	// descriptors directly. This ensures Wait() blocks until all child
+	// process output has been consumed (not just until the process exits).
+	cmd.Stdout = writerOf(cfg.Stdout)
+	cmd.Stderr = writerOf(cfg.Stderr)
 	if err := cmd.Start(); err != nil {
 		cleanup()
 		return nil, fmt.Errorf("start pasta: %w", err)
@@ -375,3 +379,12 @@ func findFirecrackerPID(socketPath string) int {
 	}
 	return 0
 }
+
+// pipeWriter wraps an io.Writer so that exec.Cmd sees a plain io.Writer
+// instead of an *os.File. This forces Go to create a pipe and copy goroutine,
+// making Wait() block until all output is consumed.
+type pipeWriter struct{ w io.Writer }
+
+func (pw pipeWriter) Write(p []byte) (int, error) { return pw.w.Write(p) }
+
+func writerOf(w io.Writer) io.Writer { return pipeWriter{w} }

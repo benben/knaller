@@ -74,7 +74,7 @@ func Start(args []string) error {
 
 	// Clean up all resources: socket, rootfs copy.
 	vm.Cleanup()
-	fmt.Fprintln(os.Stderr, "VM stopped and cleaned up.")
+	fmt.Fprintf(os.Stderr, "\nVM stopped and cleaned up.\n")
 	return nil
 }
 
