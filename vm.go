@@ -15,6 +15,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -34,7 +35,7 @@ type VM struct {
 	SocketPath string
 	StartedAt  time.Time
 	Status     string
-	CPUs       int
+	CPUs       float64
 	Memory     int
 	GuestIP    string
 	SSHPort    int
@@ -105,12 +106,35 @@ func Run(ctx context.Context, cfg *Config) (*VM, error) {
 	// and DNAT (so pasta's SSH port forwarding reaches the guest), then exec's
 	// Firecracker. All without root — pasta provides CAP_NET_ADMIN in the namespace.
 	script := namespaceSetupScript(nc, cfg.FirecrackerBin, socketPath)
-	cmd = exec.CommandContext(ctx, cfg.PastaBin,
+	pastaArgs := []string{
 		"--config-net",
 		"-t", fmt.Sprintf("%d:22", nc.SSHPort),
 		"-4", "-f",
 		"--",
-		"sh", "-c", script)
+		"sh", "-c", script,
+	}
+
+	// Compute actual vCPU count (Firecracker requires integer vCPUs).
+	// Fractional values like 0.5 mean "1 vCPU at 50% CPU quota" — the quota
+	// is enforced via systemd-run's CPUQuota= cgroup setting.
+	vcpus := int(math.Ceil(cfg.CPUs))
+	if vcpus < 1 {
+		vcpus = 1
+	}
+	needsQuota := cfg.CPUs != float64(vcpus)
+
+	if needsQuota {
+		// Wrap with systemd-run to enforce CPU quota via cgroup.
+		// CPUQuota is a percentage: 0.5 CPUs = 50%, 1.5 CPUs = 150%.
+		quota := int(math.Ceil(cfg.CPUs * 100))
+		args := []string{"--user", "--scope", "-q",
+			"-p", fmt.Sprintf("CPUQuota=%d%%", quota),
+			"--", cfg.PastaBin}
+		args = append(args, pastaArgs...)
+		cmd = exec.CommandContext(ctx, "systemd-run", args...)
+	} else {
+		cmd = exec.CommandContext(ctx, cfg.PastaBin, pastaArgs...)
+	}
 	// Wrap writers so exec.Cmd creates pipes instead of passing file
 	// descriptors directly. This ensures Wait() blocks until all child
 	// process output has been consumed (not just until the process exits).
@@ -147,12 +171,30 @@ func Run(ctx context.Context, cfg *Config) (*VM, error) {
 		return nil, fmt.Errorf("set boot source: %w", err)
 	}
 
-	if err := client.SetDrive(ctx, &firecracker.Drive{
+	drive := &firecracker.Drive{
 		DriveID:      "rootfs",
 		PathOnHost:   diskPath,
 		IsRootDevice: true,
 		IsReadOnly:   false,
-	}); err != nil {
+	}
+	if cfg.DiskMBps > 0 || cfg.DiskIOPS > 0 {
+		drive.RateLimiter = &firecracker.RateLimiter{}
+		if cfg.DiskMBps > 0 {
+			// Convert MB/s to bytes per second.
+			// The token bucket refills every 1000ms, so size = bytes per second.
+			drive.RateLimiter.Bandwidth = &firecracker.TokenBucket{
+				Size:         int64(cfg.DiskMBps) * 1_000_000,
+				RefillTimeMs: 1000,
+			}
+		}
+		if cfg.DiskIOPS > 0 {
+			drive.RateLimiter.Ops = &firecracker.TokenBucket{
+				Size:         int64(cfg.DiskIOPS),
+				RefillTimeMs: 1000,
+			}
+		}
+	}
+	if err := client.SetDrive(ctx, drive); err != nil {
 		cleanup()
 		return nil, fmt.Errorf("set drive: %w", err)
 	}
@@ -162,10 +204,10 @@ func Run(ctx context.Context, cfg *Config) (*VM, error) {
 		HostDevName: nc.TAPDevice,
 		GuestMAC:    nc.GuestMAC,
 	}
-	if cfg.BandwidthMbps > 0 {
+	if cfg.NetworkMbps > 0 {
 		// Convert Mbps to bytes per second: Mbps * 1_000_000 / 8.
 		// The token bucket refills every 1000ms, so size = bytes per second.
-		bytesPerSecond := int64(cfg.BandwidthMbps) * 1_000_000 / 8
+		bytesPerSecond := int64(cfg.NetworkMbps * 1_000_000 / 8)
 		limiter := &firecracker.RateLimiter{
 			Bandwidth: &firecracker.TokenBucket{
 				Size:         bytesPerSecond,
@@ -181,7 +223,7 @@ func Run(ctx context.Context, cfg *Config) (*VM, error) {
 	}
 
 	if err := client.SetMachineConfig(ctx, &firecracker.MachineConfig{
-		VcpuCount:  cfg.CPUs,
+		VcpuCount:  vcpus,
 		MemSizeMib: cfg.Memory,
 		Smt:        false,
 	}); err != nil {
@@ -299,7 +341,7 @@ func List() ([]*VM, error) {
 		vmCfg, err := client.GetVMConfig(ctx)
 		if err == nil {
 			if vmCfg.MachineConfig != nil {
-				vm.CPUs = vmCfg.MachineConfig.VcpuCount
+				vm.CPUs = float64(vmCfg.MachineConfig.VcpuCount)
 				vm.Memory = vmCfg.MachineConfig.MemSizeMib
 			}
 			if vmCfg.BootSource != nil {

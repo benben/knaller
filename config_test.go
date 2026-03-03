@@ -18,7 +18,7 @@ func TestConfigDefaults(t *testing.T) {
 		t.Errorf("expected 8-char hex name, got %q (len %d)", cfg.Name, len(cfg.Name))
 	}
 	if cfg.CPUs != 1 {
-		t.Errorf("CPUs = %d, want 1", cfg.CPUs)
+		t.Errorf("CPUs = %g, want 1", cfg.CPUs)
 	}
 	if cfg.Memory != 1024 {
 		t.Errorf("Memory = %d, want 1024", cfg.Memory)
@@ -46,7 +46,7 @@ func TestConfigDefaultsPreserveValues(t *testing.T) {
 		t.Errorf("Name = %q, want myvm", cfg.Name)
 	}
 	if cfg.CPUs != 4 {
-		t.Errorf("CPUs = %d, want 4", cfg.CPUs)
+		t.Errorf("CPUs = %g, want 4", cfg.CPUs)
 	}
 	if cfg.Memory != 512 {
 		t.Errorf("Memory = %d, want 512", cfg.Memory)

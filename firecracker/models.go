@@ -20,11 +20,13 @@ type BootSource struct {
 // Drive attaches a block device (disk image) to the VM. Firecracker supports
 // multiple drives; the root device (IsRootDevice=true) is used as the guest's
 // root filesystem. Set IsReadOnly=false if the guest needs to write to the disk.
+// RateLimiter is an optional token-bucket rate limiter for disk I/O.
 type Drive struct {
-	DriveID      string `json:"drive_id"`
-	PathOnHost   string `json:"path_on_host"`
-	IsRootDevice bool   `json:"is_root_device"`
-	IsReadOnly   bool   `json:"is_read_only"`
+	DriveID      string       `json:"drive_id"`
+	PathOnHost   string       `json:"path_on_host"`
+	IsRootDevice bool         `json:"is_root_device"`
+	IsReadOnly   bool         `json:"is_read_only"`
+	RateLimiter  *RateLimiter `json:"rate_limiter,omitempty"`
 }
 
 // MachineConfig sets the virtual hardware: number of vCPUs and memory size.

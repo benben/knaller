@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 
 	"github.com/benben/knaller"
@@ -21,10 +22,12 @@ func Start(args []string) error {
 	name := fs.String("name", "", "VM name (required)")
 	kernel := fs.String("kernel", defaultKernel, "Kernel image path")
 	rootfs := fs.String("rootfs", defaultRootFS, "Base rootfs path")
-	cpus := fs.Int("cpus", 1, "Number of vCPUs")
+	cpus := fs.Float64("cpus", 1, "vCPUs (e.g. 0.5 = 1 vCPU at 50% CPU quota)")
 	mem := fs.Int("mem", 1024, "Memory in MiB")
+	netBw := fs.Float64("network-bandwidth", 0, "Network bandwidth limit in Mbps per direction (0 = unlimited)")
+	diskBw := fs.Int("disk-bandwidth", 0, "Disk bandwidth limit in MB/s (0 = unlimited)")
+	diskIOPS := fs.Int("disk-iops", 0, "Disk I/O operations per second limit (0 = unlimited)")
 	fcBin := fs.String("firecracker", "firecracker", "Firecracker binary path")
-	bandwidth := fs.Int("bandwidth", 0, "Network bandwidth limit in Mbps per direction (0 = unlimited)")
 	pastaBin := fs.String("pasta", "pasta", "pasta binary path")
 	verbose := fs.Bool("verbose", false, "Show serial console and process output")
 	fs.Parse(args)
@@ -39,7 +42,9 @@ func Start(args []string) error {
 		RootFS:         *rootfs,
 		CPUs:           *cpus,
 		Memory:         *mem,
-		BandwidthMbps:  *bandwidth,
+		NetworkMbps:    *netBw,
+		DiskMBps:       *diskBw,
+		DiskIOPS:       *diskIOPS,
 		FirecrackerBin: *fcBin,
 		PastaBin:       *pastaBin,
 	}
@@ -57,11 +62,22 @@ func Start(args []string) error {
 	}
 
 	// Print connection info so the user knows how to reach the VM.
-	bw := "unlimited"
-	if *bandwidth > 0 {
-		bw = fmt.Sprintf("%d Mbps", *bandwidth)
+	netInfo := "net: unlimited"
+	if *netBw > 0 {
+		netInfo = fmt.Sprintf("net: %g Mbps", *netBw)
 	}
-	fmt.Fprintf(os.Stderr, "\nVM %q started (%d vCPUs, %d MiB, %s)\n", vm.Name, vm.CPUs, vm.Memory, bw)
+	diskInfo := "disk: unlimited"
+	if *diskBw > 0 || *diskIOPS > 0 {
+		parts := []string{}
+		if *diskBw > 0 {
+			parts = append(parts, fmt.Sprintf("%d MB/s", *diskBw))
+		}
+		if *diskIOPS > 0 {
+			parts = append(parts, fmt.Sprintf("%d IOPS", *diskIOPS))
+		}
+		diskInfo = "disk: " + strings.Join(parts, ", ")
+	}
+	fmt.Fprintf(os.Stderr, "\nVM %q started (%g vCPUs, %d MiB, %s, %s)\n", vm.Name, vm.CPUs, vm.Memory, netInfo, diskInfo)
 	fmt.Fprintf(os.Stderr, "  ssh -p %d root@localhost\n", vm.SSHPort)
 	fmt.Fprintf(os.Stderr, "  Press Ctrl+C to stop\n\n")
 

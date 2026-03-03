@@ -17,9 +17,11 @@ type Config struct {
 	Name           string    // VM name (random 8-char hex if empty)
 	Kernel         string    // path to vmlinux kernel image
 	RootFS         string    // path to base rootfs ext4 image (copied per-VM)
-	CPUs           int       // number of vCPUs (default: 1)
+	CPUs           float64   // vCPUs (default: 1, e.g. 0.5 = 1 vCPU at 50% quota)
 	Memory         int       // memory in MiB (default: 1024, minimum: 128)
-	BandwidthMbps  int       // network bandwidth limit in Mbps per direction (0 = unlimited)
+	NetworkMbps    float64   // network bandwidth limit in Mbps per direction (0 = unlimited)
+	DiskMBps       int       // disk bandwidth limit in MB/s (0 = unlimited)
+	DiskIOPS       int       // disk I/O operations per second limit (0 = unlimited)
 	FirecrackerBin string    // path to firecracker binary (default: "firecracker")
 	PastaBin       string    // path to pasta binary (default: "pasta")
 	Stdout         io.Writer // serial console log output (default: io.Discard)
@@ -32,7 +34,7 @@ func (c *Config) setDefaults() {
 		c.Name = randomName()
 	}
 	if c.CPUs == 0 {
-		c.CPUs = 1
+		c.CPUs = 1.0
 	}
 	if c.Memory == 0 {
 		c.Memory = 1024
@@ -67,8 +69,8 @@ func (c *Config) validate() error {
 	if _, err := os.Stat(c.RootFS); err != nil {
 		return fmt.Errorf("rootfs: %w", err)
 	}
-	if c.CPUs < 1 {
-		return errors.New("cpus must be >= 1")
+	if c.CPUs <= 0 {
+		return errors.New("cpus must be > 0")
 	}
 	if c.Memory < 128 {
 		return errors.New("memory must be >= 128 MiB")

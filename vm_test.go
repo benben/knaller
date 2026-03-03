@@ -102,7 +102,7 @@ func TestListWithMockSocket(t *testing.T) {
 		t.Errorf("status = %q, want Running", vm.Status)
 	}
 	if vm.CPUs != 2 {
-		t.Errorf("cpus = %d, want 2", vm.CPUs)
+		t.Errorf("cpus = %g, want 2", vm.CPUs)
 	}
 	if vm.Memory != 256 {
 		t.Errorf("memory = %d, want 256", vm.Memory)
