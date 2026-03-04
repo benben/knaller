@@ -1,4 +1,4 @@
-# knaller
+# 🧨 knaller
 
 knaller ([/ˈknalɐ/](https://de.wiktionary.org/wiki/Knaller)) — a Go library and CLI for running [Firecracker](https://github.com/firecracker-microvm/firecracker) microVMs.
 
@@ -13,8 +13,20 @@ knaller ([/ˈknalɐ/](https://de.wiktionary.org/wiki/Knaller)) — a Go library 
 
 - Linux with KVM
 - [Firecracker binary](https://github.com/firecracker-microvm/firecracker/releases)
-- [pasta](https://passt.top/)) for rootless user space networking
+- [pasta](https://passt.top/) for rootless user space networking
 - Podman for building the guest rootfs image
+
+## Install
+
+CLI:
+```
+go install github.com/benben/knaller/cmd/knaller@v0.0.1
+```
+
+Library:
+```
+go get github.com/benben/knaller
+```
 
 ## Quick start
 
@@ -62,7 +74,7 @@ Usage of start:
   -firecracker string
         Firecracker binary path (default "firecracker")
   -from-snapshot string
-        Restore from snapshot ID instead of booting fresh
+        Restore from snapshot ID
   -kernel string
         Kernel image path (default "~/.local/share/knaller/vmlinux")
   -mem int
