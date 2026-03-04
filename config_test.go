@@ -132,6 +132,14 @@ func TestConfigValidateSuccess(t *testing.T) {
 	}
 }
 
+func TestConfigValidateSnapshotSkipsKernelRootfs(t *testing.T) {
+	cfg := &Config{SnapshotID: "snap_abcd1234"}
+	cfg.setDefaults()
+	if err := cfg.validate(); err != nil {
+		t.Fatalf("expected no error with SnapshotID set, got: %v", err)
+	}
+}
+
 func TestRandomName(t *testing.T) {
 	name1 := randomName()
 	name2 := randomName()

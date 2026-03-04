@@ -18,15 +18,15 @@ import (
 // The VM is non-interactive — connect via SSH. Press Ctrl+C to stop.
 func Start(args []string) error {
 	fs := flag.NewFlagSet("start", flag.ExitOnError)
-	defaultKernel, defaultRootFS := defaultPaths()
 	name := fs.String("name", "", "VM name (required)")
-	kernel := fs.String("kernel", defaultKernel, "Kernel image path")
-	rootfs := fs.String("rootfs", defaultRootFS, "Base rootfs path")
+	kernel := fs.String("kernel", "~/.local/share/knaller/vmlinux", "Kernel image path")
+	rootfs := fs.String("rootfs", "~/.local/share/knaller/rootfs.ext4", "Base rootfs path")
 	cpus := fs.Float64("cpus", 1, "vCPUs (e.g. 0.5 = 1 vCPU at 50% CPU quota)")
 	mem := fs.Int("mem", 1024, "Memory in MiB")
 	netBw := fs.Float64("network-bandwidth", 0, "Network bandwidth limit in Mbps per direction (0 = unlimited)")
 	diskBw := fs.Int("disk-bandwidth", 0, "Disk bandwidth limit in MB/s (0 = unlimited)")
 	diskIOPS := fs.Int("disk-iops", 0, "Disk I/O operations per second limit (0 = unlimited)")
+	fromSnapshot := fs.String("from-snapshot", "", "Restore from snapshot ID")
 	fcBin := fs.String("firecracker", "firecracker", "Firecracker binary path")
 	pastaBin := fs.String("pasta", "pasta", "pasta binary path")
 	verbose := fs.Bool("verbose", false, "Show serial console and process output")
@@ -38,13 +38,14 @@ func Start(args []string) error {
 
 	cfg := &knaller.Config{
 		Name:           *name,
-		Kernel:         *kernel,
-		RootFS:         *rootfs,
+		Kernel:         expandHome(*kernel),
+		RootFS:         expandHome(*rootfs),
 		CPUs:           *cpus,
 		Memory:         *mem,
 		NetworkMbps:    *netBw,
 		DiskMBps:       *diskBw,
 		DiskIOPS:       *diskIOPS,
+		SnapshotID:     *fromSnapshot,
 		FirecrackerBin: *fcBin,
 		PastaBin:       *pastaBin,
 	}
@@ -62,23 +63,27 @@ func Start(args []string) error {
 	}
 
 	// Print connection info so the user knows how to reach the VM.
-	netInfo := "net: unlimited"
-	if *netBw > 0 {
-		netInfo = fmt.Sprintf("net: %g Mbps", *netBw)
-	}
-	diskInfo := "disk: unlimited"
-	if *diskBw > 0 || *diskIOPS > 0 {
-		parts := []string{}
-		if *diskBw > 0 {
-			parts = append(parts, fmt.Sprintf("%d MB/s", *diskBw))
+	if *fromSnapshot != "" {
+		fmt.Fprintf(os.Stderr, "\nVM %q started from snapshot %s (%g vCPUs, %d MiB)\n", vm.Name, *fromSnapshot, vm.CPUs, vm.Memory)
+	} else {
+		netInfo := "net: unlimited"
+		if *netBw > 0 {
+			netInfo = fmt.Sprintf("net: %g Mbps", *netBw)
 		}
-		if *diskIOPS > 0 {
-			parts = append(parts, fmt.Sprintf("%d IOPS", *diskIOPS))
+		diskInfo := "disk: unlimited"
+		if *diskBw > 0 || *diskIOPS > 0 {
+			parts := []string{}
+			if *diskBw > 0 {
+				parts = append(parts, fmt.Sprintf("%d MB/s", *diskBw))
+			}
+			if *diskIOPS > 0 {
+				parts = append(parts, fmt.Sprintf("%d IOPS", *diskIOPS))
+			}
+			diskInfo = "disk: " + strings.Join(parts, ", ")
 		}
-		diskInfo = "disk: " + strings.Join(parts, ", ")
+		fmt.Fprintf(os.Stderr, "\nVM %q started (%g vCPUs, %d MiB, %s, %s)\n", vm.Name, vm.CPUs, vm.Memory, netInfo, diskInfo)
 	}
-	fmt.Fprintf(os.Stderr, "\nVM %q started (%g vCPUs, %d MiB, %s, %s)\n", vm.Name, vm.CPUs, vm.Memory, netInfo, diskInfo)
-	fmt.Fprintf(os.Stderr, "  ssh -p %d root@localhost\n", vm.SSHPort)
+	fmt.Fprintf(os.Stderr, "  ssh -p %d root@localhost\n", vm.Port)
 	fmt.Fprintf(os.Stderr, "  Press Ctrl+C to stop\n\n")
 
 	// Catch Ctrl+C and SIGTERM to gracefully shut down the VM before exiting.
@@ -100,10 +105,11 @@ func Start(args []string) error {
 	return nil
 }
 
-// defaultPaths returns the default kernel and rootfs paths under
-// ~/.local/share/knaller/.
-func defaultPaths() (kernel, rootfs string) {
-	home, _ := os.UserHomeDir()
-	base := filepath.Join(home, ".local", "share", "knaller")
-	return filepath.Join(base, "vmlinux"), filepath.Join(base, "rootfs.ext4")
+// expandHome replaces a leading ~ with the user's home directory.
+func expandHome(path string) string {
+	if strings.HasPrefix(path, "~/") {
+		home, _ := os.UserHomeDir()
+		return filepath.Join(home, path[2:])
+	}
+	return path
 }

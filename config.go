@@ -12,7 +12,7 @@ import (
 // Config describes a microVM to start. At minimum, Kernel and RootFS must be
 // set. Knaller starts a Firecracker process, connects to its API socket,
 // configures the VM, and boots it. Interact with the running VM via SSH
-// (the guest IP is returned in VM.GuestIP).
+// (the SSH port is returned in VM.Port).
 type Config struct {
 	Name           string    // VM name (random 8-char hex if empty)
 	Kernel         string    // path to vmlinux kernel image
@@ -22,6 +22,7 @@ type Config struct {
 	NetworkMbps    float64   // network bandwidth limit in Mbps per direction (0 = unlimited)
 	DiskMBps       int       // disk bandwidth limit in MB/s (0 = unlimited)
 	DiskIOPS       int       // disk I/O operations per second limit (0 = unlimited)
+	SnapshotID     string    // restore from this snapshot instead of booting fresh
 	FirecrackerBin string    // path to firecracker binary (default: "firecracker")
 	PastaBin       string    // path to pasta binary (default: "pasta")
 	Stdout         io.Writer // serial console log output (default: io.Discard)
@@ -53,10 +54,13 @@ func (c *Config) setDefaults() {
 	}
 }
 
-// validate checks that all required fields are set and valid. Kernel and RootFS
-// must point to existing files. CPUs must be >= 1 and Memory >= 128 MiB
-// (Firecracker's minimum).
+// validate checks that all required fields are set and valid. When restoring
+// from a snapshot (SnapshotID is set), kernel/rootfs/cpus/memory come from the
+// snapshot and are not validated here.
 func (c *Config) validate() error {
+	if c.SnapshotID != "" {
+		return nil
+	}
 	if c.Kernel == "" {
 		return errors.New("kernel path is required")
 	}

@@ -7,16 +7,18 @@ import (
 	"testing"
 )
 
-func TestDefaultPaths(t *testing.T) {
-	kernel, rootfs := defaultPaths()
+func TestExpandHome(t *testing.T) {
 	home, _ := os.UserHomeDir()
-	expectedBase := filepath.Join(home, ".local", "share", "knaller")
 
-	if kernel != filepath.Join(expectedBase, "vmlinux") {
-		t.Errorf("kernel = %q", kernel)
+	got := expandHome("~/.local/share/knaller/vmlinux")
+	want := filepath.Join(home, ".local", "share", "knaller", "vmlinux")
+	if got != want {
+		t.Errorf("expandHome = %q, want %q", got, want)
 	}
-	if rootfs != filepath.Join(expectedBase, "rootfs.ext4") {
-		t.Errorf("rootfs = %q", rootfs)
+
+	// Non-tilde path should be unchanged.
+	if expandHome("/tmp/foo") != "/tmp/foo" {
+		t.Error("expandHome changed non-tilde path")
 	}
 }
 

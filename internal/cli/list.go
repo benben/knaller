@@ -26,7 +26,7 @@ func List(args []string) error {
 		if vm.PID > 0 {
 			pid = fmt.Sprintf("%d", vm.PID)
 		}
-		ssh := fmt.Sprintf("localhost:%d", vm.SSHPort)
+		ssh := fmt.Sprintf("localhost:%d", vm.Port)
 		fmt.Fprintf(w, "%s\t%s\t%g\t%dMiB\t%s\t%s\t%s\n",
 			vm.Name, vm.Status, vm.CPUs, vm.Memory, ssh, pid, age)
 	}

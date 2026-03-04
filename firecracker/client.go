@@ -68,6 +68,34 @@ func (c *Client) put(ctx context.Context, path string, body any) error {
 	return fmt.Errorf("firecracker: unexpected status %d: %s", resp.StatusCode, respBody)
 }
 
+// patch sends a PATCH request with a JSON body. Firecracker uses PATCH for
+// the /vm endpoint (pause/resume). Like put, expects 204 No Content on success.
+func (c *Client) patch(ctx context.Context, path string, body any) error {
+	data, err := json.Marshal(body)
+	if err != nil {
+		return fmt.Errorf("marshal: %w", err)
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPatch, "http://localhost"+path, bytes.NewReader(data))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusNoContent {
+		return nil
+	}
+	respBody, _ := io.ReadAll(resp.Body)
+	var errResp ErrorResponse
+	if json.Unmarshal(respBody, &errResp) == nil && errResp.FaultMessage != "" {
+		return fmt.Errorf("firecracker: %s", errResp.FaultMessage)
+	}
+	return fmt.Errorf("firecracker: unexpected status %d: %s", resp.StatusCode, respBody)
+}
+
 // get sends a GET request and decodes the JSON response into result.
 func (c *Client) get(ctx context.Context, path string, result any) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://localhost"+path, nil)
@@ -155,4 +183,49 @@ func (c *Client) GetVMConfig(ctx context.Context) (*VMConfig, error) {
 		return nil, err
 	}
 	return &vc, nil
+}
+
+// PauseVM pauses a running VM by freezing its vCPUs. Must be called before
+// creating a snapshot.
+func (c *Client) PauseVM(ctx context.Context) error {
+	return c.patch(ctx, "/vm", &struct {
+		State string `json:"state"`
+	}{State: "Paused"})
+}
+
+// ResumeVM resumes a paused VM, unfreezing its vCPUs.
+func (c *Client) ResumeVM(ctx context.Context) error {
+	return c.patch(ctx, "/vm", &struct {
+		State string `json:"state"`
+	}{State: "Resumed"})
+}
+
+// CreateSnapshot creates a full snapshot of a paused VM. The VM must be paused
+// first via PauseVM. Firecracker writes device state to SnapshotPath and a
+// full memory dump to MemFilePath.
+func (c *Client) CreateSnapshot(ctx context.Context, sc *SnapshotCreate) error {
+	return c.put(ctx, "/snapshot/create", sc)
+}
+
+// LoadSnapshot loads a previously saved snapshot into an unconfigured Firecracker
+// instance. After loading, the VM is paused and must be resumed via ResumeVM.
+// Drive paths can be updated with PatchDrive before resuming.
+func (c *Client) LoadSnapshot(ctx context.Context, snapshotPath, memPath string) error {
+	return c.put(ctx, "/snapshot/load", map[string]any{
+		"snapshot_path": snapshotPath,
+		"mem_backend": map[string]any{
+			"backend_type": "File",
+			"backend_path": memPath,
+		},
+		"resume_vm": false,
+	})
+}
+
+// PatchDrive updates the backing file path for a drive. Used after loading a
+// snapshot to point the drive at a new rootfs location before resuming.
+func (c *Client) PatchDrive(ctx context.Context, driveID, pathOnHost string) error {
+	return c.patch(ctx, "/drives/"+driveID, map[string]any{
+		"drive_id":     driveID,
+		"path_on_host": pathOnHost,
+	})
 }

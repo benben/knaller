@@ -34,6 +34,22 @@ func prepareDisk(name, baseRootFS string) (string, error) {
 	return dst, nil
 }
 
+// prepareDiskFromSnapshot copies a snapshot's rootfs to a per-VM directory.
+// Like prepareDisk, uses cp --reflink=auto for efficient copy-on-write.
+func prepareDiskFromSnapshot(name, snapID string) (string, error) {
+	dir := vmDataDir(name)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return "", fmt.Errorf("create vm dir: %w", err)
+	}
+	dst := filepath.Join(dir, "rootfs.ext4")
+	src := filepath.Join(snapshotDir(snapID), "rootfs.ext4")
+	cmd := exec.Command("cp", "--reflink=auto", src, dst)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return "", fmt.Errorf("copy rootfs: %s: %w", out, err)
+	}
+	return dst, nil
+}
+
 // hostNameservers reads the host's /etc/resolv.conf and returns usable DNS
 // server addresses. It skips localhost entries like 127.0.0.53 (systemd-resolved
 // stub) since those won't work inside the VM — the guest has its own network

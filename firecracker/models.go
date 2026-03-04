@@ -68,6 +68,16 @@ type TokenBucket struct {
 	RefillTimeMs int64 `json:"refill_time"`
 }
 
+// SnapshotCreate is the request body for PUT /snapshot/create. The VM must be
+// paused before creating a snapshot. SnapshotType is "Full" for a complete
+// snapshot. SnapshotPath and MemFilePath are where Firecracker writes the
+// device state and memory dump respectively.
+type SnapshotCreate struct {
+	SnapshotType string `json:"snapshot_type"`
+	SnapshotPath string `json:"snapshot_path"`
+	MemFilePath  string `json:"mem_file_path"`
+}
+
 // Action is a command sent to a running Firecracker instance. The two main
 // actions are "InstanceStart" (boot the VM) and "SendCtrlAltDel" (graceful
 // shutdown — the guest OS handles this like pressing Ctrl+Alt+Del).

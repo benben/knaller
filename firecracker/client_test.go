@@ -261,6 +261,157 @@ func TestGetVMConfig(t *testing.T) {
 	}
 }
 
+func TestPauseVM(t *testing.T) {
+	var gotMethod string
+	var gotBody map[string]string
+	mux := http.NewServeMux()
+	mux.HandleFunc("/vm", func(w http.ResponseWriter, r *http.Request) {
+		gotMethod = r.Method
+		json.NewDecoder(r.Body).Decode(&gotBody)
+		w.WriteHeader(http.StatusNoContent)
+	})
+
+	sock, cleanup := testServer(t, mux)
+	defer cleanup()
+
+	client := NewClient(sock)
+	if err := client.PauseVM(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if gotMethod != "PATCH" {
+		t.Errorf("method = %s, want PATCH", gotMethod)
+	}
+	if gotBody["state"] != "Paused" {
+		t.Errorf("state = %q, want Paused", gotBody["state"])
+	}
+}
+
+func TestResumeVM(t *testing.T) {
+	var gotBody map[string]string
+	mux := http.NewServeMux()
+	mux.HandleFunc("/vm", func(w http.ResponseWriter, r *http.Request) {
+		json.NewDecoder(r.Body).Decode(&gotBody)
+		w.WriteHeader(http.StatusNoContent)
+	})
+
+	sock, cleanup := testServer(t, mux)
+	defer cleanup()
+
+	client := NewClient(sock)
+	if err := client.ResumeVM(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if gotBody["state"] != "Resumed" {
+		t.Errorf("state = %q, want Resumed", gotBody["state"])
+	}
+}
+
+func TestCreateSnapshot(t *testing.T) {
+	var gotPath string
+	var gotBody SnapshotCreate
+	mux := http.NewServeMux()
+	mux.HandleFunc("/snapshot/create", func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		json.NewDecoder(r.Body).Decode(&gotBody)
+		w.WriteHeader(http.StatusNoContent)
+	})
+
+	sock, cleanup := testServer(t, mux)
+	defer cleanup()
+
+	client := NewClient(sock)
+	err := client.CreateSnapshot(context.Background(), &SnapshotCreate{
+		SnapshotType: "Full",
+		SnapshotPath: "/tmp/state",
+		MemFilePath:  "/tmp/memory",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotPath != "/snapshot/create" {
+		t.Errorf("path = %s, want /snapshot/create", gotPath)
+	}
+	if gotBody.SnapshotType != "Full" {
+		t.Errorf("snapshot_type = %q, want Full", gotBody.SnapshotType)
+	}
+	if gotBody.SnapshotPath != "/tmp/state" {
+		t.Errorf("snapshot_path = %q, want /tmp/state", gotBody.SnapshotPath)
+	}
+}
+
+func TestLoadSnapshot(t *testing.T) {
+	var gotPath, gotMethod string
+	var gotBody map[string]any
+	mux := http.NewServeMux()
+	mux.HandleFunc("/snapshot/load", func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		gotMethod = r.Method
+		json.NewDecoder(r.Body).Decode(&gotBody)
+		w.WriteHeader(http.StatusNoContent)
+	})
+
+	sock, cleanup := testServer(t, mux)
+	defer cleanup()
+
+	client := NewClient(sock)
+	err := client.LoadSnapshot(context.Background(), "/tmp/state", "/tmp/memory")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotMethod != "PUT" {
+		t.Errorf("method = %s, want PUT", gotMethod)
+	}
+	if gotPath != "/snapshot/load" {
+		t.Errorf("path = %s, want /snapshot/load", gotPath)
+	}
+	if gotBody["snapshot_path"] != "/tmp/state" {
+		t.Errorf("snapshot_path = %v, want /tmp/state", gotBody["snapshot_path"])
+	}
+	memBackend, ok := gotBody["mem_backend"].(map[string]any)
+	if !ok {
+		t.Fatal("mem_backend missing or wrong type")
+	}
+	if memBackend["backend_type"] != "File" {
+		t.Errorf("backend_type = %v, want File", memBackend["backend_type"])
+	}
+	if memBackend["backend_path"] != "/tmp/memory" {
+		t.Errorf("backend_path = %v, want /tmp/memory", memBackend["backend_path"])
+	}
+	if gotBody["resume_vm"] != false {
+		t.Errorf("resume_vm = %v, want false", gotBody["resume_vm"])
+	}
+}
+
+func TestPatchDrive(t *testing.T) {
+	var gotPath, gotMethod string
+	var gotBody map[string]any
+	mux := http.NewServeMux()
+	mux.HandleFunc("/drives/", func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		gotMethod = r.Method
+		json.NewDecoder(r.Body).Decode(&gotBody)
+		w.WriteHeader(http.StatusNoContent)
+	})
+
+	sock, cleanup := testServer(t, mux)
+	defer cleanup()
+
+	client := NewClient(sock)
+	err := client.PatchDrive(context.Background(), "rootfs", "/new/rootfs.ext4")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotMethod != "PATCH" {
+		t.Errorf("method = %s, want PATCH", gotMethod)
+	}
+	if gotPath != "/drives/rootfs" {
+		t.Errorf("path = %s, want /drives/rootfs", gotPath)
+	}
+	if gotBody["path_on_host"] != "/new/rootfs.ext4" {
+		t.Errorf("path_on_host = %v, want /new/rootfs.ext4", gotBody["path_on_host"])
+	}
+}
+
 func TestErrorResponse(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/boot-source", func(w http.ResponseWriter, r *http.Request) {

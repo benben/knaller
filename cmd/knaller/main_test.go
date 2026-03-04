@@ -56,3 +56,37 @@ func TestDispatchStopMissingName(t *testing.T) {
 		t.Fatal("expected error for stop without --name")
 	}
 }
+
+func TestDispatchPauseMissingName(t *testing.T) {
+	err := dispatch([]string{"pause"})
+	if err == nil {
+		t.Fatal("expected error for pause without --name")
+	}
+}
+
+func TestDispatchResumeMissingName(t *testing.T) {
+	err := dispatch([]string{"resume"})
+	if err == nil {
+		t.Fatal("expected error for resume without --name")
+	}
+}
+
+func TestDispatchSnapshotMissingName(t *testing.T) {
+	err := dispatch([]string{"snapshot"})
+	if err == nil {
+		t.Fatal("expected error for snapshot without --name")
+	}
+}
+
+func TestDispatchSnapshotLs(t *testing.T) {
+	if err := dispatch([]string{"snapshot", "ls"}); err != nil {
+		t.Fatalf("dispatch snapshot ls: %v", err)
+	}
+}
+
+func TestDispatchSnapshotDeleteMissingID(t *testing.T) {
+	err := dispatch([]string{"snapshot", "delete"})
+	if err == nil {
+		t.Fatal("expected error for snapshot delete without --id")
+	}
+}

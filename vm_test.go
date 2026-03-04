@@ -107,8 +107,8 @@ func TestListWithMockSocket(t *testing.T) {
 	if vm.Memory != 256 {
 		t.Errorf("memory = %d, want 256", vm.Memory)
 	}
-	if vm.GuestIP != "172.16.0.2" {
-		t.Errorf("guest_ip = %q, want 172.16.0.2", vm.GuestIP)
+	if vm.Port == 0 {
+		t.Error("expected non-zero Port")
 	}
 }
 

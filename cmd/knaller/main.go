@@ -30,16 +30,24 @@ func main() {
 // It's separated from main() so it can be tested without os.Exit.
 func dispatch(args []string) error {
 	cmds := map[string]func([]string) error{
-		"start":   cli.Start,
-		"stop":    cli.Stop,
-		"list":    cli.List,
-		"ls":      cli.List,
-		"version": cli.Version,
+		"start":    cli.Start,
+		"stop":     cli.Stop,
+		"pause":    cli.Pause,
+		"resume":   cli.Resume,
+		"snapshot": cli.Snapshot,
+		"list":     cli.List,
+		"ls":       cli.List,
+		"version":  cli.Version,
 	}
 
 	if len(args) == 0 {
 		usage()
 		return fmt.Errorf("no command specified")
+	}
+
+	if args[0] == "help" {
+		usage()
+		return nil
 	}
 
 	fn, ok := cmds[args[0]]
@@ -55,9 +63,17 @@ func usage() {
 	fmt.Fprintln(os.Stderr, "Usage: knaller <command> [flags]")
 	fmt.Fprintln(os.Stderr, "")
 	fmt.Fprintln(os.Stderr, "Commands:")
-	fmt.Fprintln(os.Stderr, "  start    Start a microVM (connect via SSH)")
-	fmt.Fprintln(os.Stderr, "  stop     Stop a running microVM")
-	fmt.Fprintln(os.Stderr, "  list     List running microVMs")
-	fmt.Fprintln(os.Stderr, "  ls       Alias for list")
-	fmt.Fprintln(os.Stderr, "  version  Print version information")
+	fmt.Fprintln(os.Stderr, "  start             Start a microVM (connect via SSH)")
+	fmt.Fprintln(os.Stderr, "  stop              Stop a running microVM")
+	fmt.Fprintln(os.Stderr, "  pause             Pause a running microVM")
+	fmt.Fprintln(os.Stderr, "  resume            Resume a paused microVM")
+	fmt.Fprintln(os.Stderr, "  snapshot          Create a VM snapshot")
+	fmt.Fprintln(os.Stderr, "  snapshot ls       List all snapshots")
+	fmt.Fprintln(os.Stderr, "  snapshot delete   Delete a snapshot")
+	fmt.Fprintln(os.Stderr, "  list              List running microVMs")
+	fmt.Fprintln(os.Stderr, "  ls                Alias for list")
+	fmt.Fprintln(os.Stderr, "  version           Print version information")
+	fmt.Fprintln(os.Stderr, "  help              Show this help")
+	fmt.Fprintln(os.Stderr, "")
+	fmt.Fprintln(os.Stderr, "Use knaller <command> --help for more information about a command.")
 }

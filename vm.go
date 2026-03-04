@@ -35,10 +35,9 @@ type VM struct {
 	SocketPath string
 	StartedAt  time.Time
 	Status     string
-	CPUs       float64
-	Memory     int
-	GuestIP    string
-	SSHPort    int
+	CPUs    float64
+	Memory  int
+	Port int // SSH port on localhost
 
 	// Private fields for managing the VM's resources.
 	cmd      *exec.Cmd
@@ -68,6 +67,16 @@ func Run(ctx context.Context, cfg *Config) (*VM, error) {
 		return nil, fmt.Errorf("config: %w", err)
 	}
 
+	// Load snapshot metadata if restoring from a snapshot.
+	var snap *Snapshot
+	if cfg.SnapshotID != "" {
+		var err error
+		snap, err = GetSnapshot(cfg.SnapshotID)
+		if err != nil {
+			return nil, err
+		}
+	}
+
 	// Each VM gets a socket at /tmp/knaller/<name>.socket (or $XDG_RUNTIME_DIR/knaller/).
 	socketDir := socketDirectory()
 	if err := os.MkdirAll(socketDir, 0o755); err != nil {
@@ -78,16 +87,30 @@ func Run(ctx context.Context, cfg *Config) (*VM, error) {
 	// Remove any stale socket from a previous run with the same name.
 	os.Remove(socketPath)
 
-	// Copy the base rootfs image so this VM has its own writable copy.
-	// Uses cp --reflink=auto for efficient copy-on-write when the filesystem
-	// supports it (btrfs, xfs with reflink).
-	diskPath, err := prepareDisk(cfg.Name, cfg.RootFS)
+	// Prepare the rootfs. For snapshot restore, copy the snapshot's rootfs.
+	// For fresh VMs, copy the base rootfs image.
+	var diskPath string
+	var err error
+	if snap != nil {
+		diskPath, err = prepareDiskFromSnapshot(cfg.Name, cfg.SnapshotID)
+	} else {
+		diskPath, err = prepareDisk(cfg.Name, cfg.RootFS)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("prepare disk: %w", err)
 	}
 
-	// Derive network configuration from the VM name (pure computation, no syscalls).
+	// Derive network configuration. For snapshot restore, the TAP device name
+	// and IPs must match the original VM (they're baked into the snapshot state),
+	// but the SSH port comes from the new VM name for uniqueness.
 	nc := deriveNetwork(cfg.Name)
+	if snap != nil {
+		orig := deriveNetwork(snap.VMName)
+		nc.TAPDevice = orig.TAPDevice
+		nc.HostIP = orig.HostIP
+		nc.GuestIP = orig.GuestIP
+		nc.GuestMAC = orig.GuestMAC
+	}
 
 	// cleanup tears down all resources created so far if we hit an error.
 	var cmd *exec.Cmd
@@ -117,16 +140,20 @@ func Run(ctx context.Context, cfg *Config) (*VM, error) {
 	// Compute actual vCPU count (Firecracker requires integer vCPUs).
 	// Fractional values like 0.5 mean "1 vCPU at 50% CPU quota" — the quota
 	// is enforced via systemd-run's CPUQuota= cgroup setting.
-	vcpus := int(math.Ceil(cfg.CPUs))
+	cpus := cfg.CPUs
+	if snap != nil {
+		cpus = float64(snap.VCPUs)
+	}
+	vcpus := int(math.Ceil(cpus))
 	if vcpus < 1 {
 		vcpus = 1
 	}
-	needsQuota := cfg.CPUs != float64(vcpus)
+	needsQuota := cpus != float64(vcpus)
 
 	if needsQuota {
 		// Wrap with systemd-run to enforce CPU quota via cgroup.
 		// CPUQuota is a percentage: 0.5 CPUs = 50%, 1.5 CPUs = 150%.
-		quota := int(math.Ceil(cfg.CPUs * 100))
+		quota := int(math.Ceil(cpus * 100))
 		args := []string{"--user", "--scope", "-q",
 			"-p", fmt.Sprintf("CPUQuota=%d%%", quota),
 			"--", cfg.PastaBin}
@@ -152,11 +179,50 @@ func Run(ctx context.Context, cfg *Config) (*VM, error) {
 		return nil, fmt.Errorf("waiting for firecracker socket: %w", err)
 	}
 
-	// Connect to the Firecracker API socket and configure the VM.
-	// All configuration must be done before calling StartInstance — after
-	// boot, the VM is immutable.
 	client := firecracker.NewClient(socketPath)
 
+	if snap != nil {
+		// Snapshot restore: load the snapshot (the state file references the
+		// snapshot dir's rootfs which always exists), patch the drive to the
+		// new VM's rootfs copy, then resume.
+		snapDir := snapshotDir(cfg.SnapshotID)
+		if err := client.LoadSnapshot(ctx,
+			filepath.Join(snapDir, "state"),
+			filepath.Join(snapDir, "memory"),
+		); err != nil {
+			cleanup()
+			return nil, fmt.Errorf("load snapshot: %w", err)
+		}
+		if err := client.PatchDrive(ctx, "rootfs", diskPath); err != nil {
+			cleanup()
+			return nil, fmt.Errorf("patch drive: %w", err)
+		}
+		if err := client.ResumeVM(ctx); err != nil {
+			cleanup()
+			return nil, fmt.Errorf("resume vm: %w", err)
+		}
+
+		memory := snap.MemSizeMib
+		if memory == 0 {
+			memory = cfg.Memory
+		}
+		return &VM{
+			Name:       cfg.Name,
+			PID:        cmd.Process.Pid,
+			SocketPath: socketPath,
+			StartedAt:  time.Now(),
+			Status:     "Running",
+			CPUs:       float64(snap.VCPUs),
+			Memory:     memory,
+			Port:    nc.SSHPort,
+			cmd:        cmd,
+			client:     client,
+			diskPath:   diskPath,
+		}, nil
+	}
+
+	// Fresh VM: configure via the Firecracker API and boot.
+	//
 	// Kernel boot args configure the guest:
 	//   reboot=k       — reboot on kernel panic instead of halting
 	//   panic=1        — reboot after 1 second on panic
@@ -246,8 +312,7 @@ func Run(ctx context.Context, cfg *Config) (*VM, error) {
 		Status:     "Running",
 		CPUs:       cfg.CPUs,
 		Memory:     cfg.Memory,
-		GuestIP:    nc.GuestIP.String(),
-		SSHPort:    nc.SSHPort,
+		Port:       nc.SSHPort,
 		cmd:        cmd,
 		client:     client,
 		diskPath:   diskPath,
@@ -296,6 +361,27 @@ func StopVM(ctx context.Context, name string) error {
 	return client.StopInstance(ctx)
 }
 
+// PauseVM pauses a running VM by name. The VM's vCPUs are frozen until
+// ResumeVM is called.
+func PauseVM(ctx context.Context, name string) error {
+	socketPath := filepath.Join(socketDirectory(), name+".socket")
+	if _, err := os.Stat(socketPath); err != nil {
+		return fmt.Errorf("VM %q not found (no socket at %s)", name, socketPath)
+	}
+	client := firecracker.NewClient(socketPath)
+	return client.PauseVM(ctx)
+}
+
+// ResumeVM resumes a paused VM by name.
+func ResumeVM(ctx context.Context, name string) error {
+	socketPath := filepath.Join(socketDirectory(), name+".socket")
+	if _, err := os.Stat(socketPath); err != nil {
+		return fmt.Errorf("VM %q not found (no socket at %s)", name, socketPath)
+	}
+	client := firecracker.NewClient(socketPath)
+	return client.ResumeVM(ctx)
+}
+
 // List discovers running VMs by scanning the socket directory and querying each
 // Firecracker instance via its API. We don't keep any state files — a socket
 // that responds to API calls means the VM is running. Stale sockets (from
@@ -332,20 +418,16 @@ func List() ([]*VM, error) {
 			Name:       name,
 			SocketPath: socketPath,
 			Status:     info.State,
-			SSHPort:    sshPort(name),
+			Port:       sshPort(name),
 			client:     client,
 		}
 
-		// Fetch the full VM config to get CPU count, memory, and guest IP.
-		// The guest IP is encoded in the kernel boot args (ip=GUEST::HOST:...).
+		// Fetch the full VM config to get CPU count and memory.
 		vmCfg, err := client.GetVMConfig(ctx)
 		if err == nil {
 			if vmCfg.MachineConfig != nil {
 				vm.CPUs = float64(vmCfg.MachineConfig.VcpuCount)
 				vm.Memory = vmCfg.MachineConfig.MemSizeMib
-			}
-			if vmCfg.BootSource != nil {
-				vm.GuestIP = parseGuestIP(vmCfg.BootSource.BootArgs)
 			}
 		}
 		cancel()
