@@ -17,9 +17,11 @@ import (
 	"io"
 	"math"
 	"os"
+	"net"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/benben/knaller/firecracker"
@@ -162,11 +164,25 @@ func Run(ctx context.Context, cfg *Config) (*VM, error) {
 	} else {
 		cmd = exec.CommandContext(ctx, cfg.PastaBin, pastaArgs...)
 	}
-	// Wrap writers so exec.Cmd creates pipes instead of passing file
-	// descriptors directly. This ensures Wait() blocks until all child
-	// process output has been consumed (not just until the process exits).
-	cmd.Stdout = writerOf(cfg.Stdout)
-	cmd.Stderr = writerOf(cfg.Stderr)
+	if cfg.Detach {
+		// Detach mode: redirect to /dev/null so the child's file descriptors
+		// don't depend on the parent. Using writerOf() would create pipes that
+		// break (SIGPIPE) when the CLI exits.
+		devNull, err := os.OpenFile(os.DevNull, os.O_WRONLY, 0)
+		if err != nil {
+			cleanup()
+			return nil, fmt.Errorf("open /dev/null: %w", err)
+		}
+		cmd.Stdout = devNull
+		cmd.Stderr = devNull
+		cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+	} else {
+		// Wrap writers so exec.Cmd creates pipes instead of passing file
+		// descriptors directly. This ensures Wait() blocks until all child
+		// process output has been consumed (not just until the process exits).
+		cmd.Stdout = writerOf(cfg.Stdout)
+		cmd.Stderr = writerOf(cfg.Stderr)
+	}
 	if err := cmd.Start(); err != nil {
 		cleanup()
 		return nil, fmt.Errorf("start pasta: %w", err)
@@ -326,6 +342,23 @@ func (vm *VM) Wait() error {
 		return nil
 	}
 	return vm.cmd.Wait()
+}
+
+// WaitForSSH polls the VM's SSH port until it accepts connections or the
+// timeout expires. This is useful in detach mode to ensure the guest has
+// fully booted before returning control to the user.
+func (vm *VM) WaitForSSH(timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	addr := fmt.Sprintf("localhost:%d", vm.Port)
+	for time.Now().Before(deadline) {
+		conn, err := net.DialTimeout("tcp", addr, 500*time.Millisecond)
+		if err == nil {
+			conn.Close()
+			return nil
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+	return fmt.Errorf("SSH port %d not ready within %s", vm.Port, timeout)
 }
 
 // Stop asks the guest OS to shut down gracefully by sending Ctrl+Alt+Del via

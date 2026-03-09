@@ -67,6 +67,8 @@ $ knaller start --help
 Usage of start:
   -cpus float
         vCPUs (e.g. 0.5 = 1 vCPU at 50% CPU quota) (default 1)
+  -detach
+        Run VM in the background
   -disk-bandwidth int
         Disk bandwidth limit in MB/s (0 = unlimited)
   -disk-iops int

@@ -23,6 +23,7 @@ type Config struct {
 	DiskMBps       int       // disk bandwidth limit in MB/s (0 = unlimited)
 	DiskIOPS       int       // disk I/O operations per second limit (0 = unlimited)
 	SnapshotID     string    // restore from this snapshot instead of booting fresh
+	Detach         bool      // start VM in background (survives terminal close)
 	FirecrackerBin string    // path to firecracker binary (default: "firecracker")
 	PastaBin       string    // path to pasta binary (default: "pasta")
 	Stdout         io.Writer // serial console log output (default: io.Discard)

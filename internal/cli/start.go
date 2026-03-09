@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/benben/knaller"
 )
@@ -29,6 +30,7 @@ func Start(args []string) error {
 	fromSnapshot := fs.String("from-snapshot", "", "Restore from snapshot ID")
 	fcBin := fs.String("firecracker", "firecracker", "Firecracker binary path")
 	pastaBin := fs.String("pasta", "pasta", "pasta binary path")
+	detach := fs.Bool("detach", false, "Run VM in the background")
 	verbose := fs.Bool("verbose", false, "Show serial console and process output")
 	fs.Parse(args)
 
@@ -49,13 +51,18 @@ func Start(args []string) error {
 		FirecrackerBin: *fcBin,
 		PastaBin:       *pastaBin,
 	}
+	cfg.Detach = *detach
 	if *verbose {
 		cfg.Stdout = os.Stdout
 		cfg.Stderr = os.Stderr
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := context.Background()
+	var cancel context.CancelFunc
+	if !*detach {
+		ctx, cancel = context.WithCancel(ctx)
+		defer cancel()
+	}
 
 	vm, err := knaller.Run(ctx, cfg)
 	if err != nil {
@@ -83,7 +90,19 @@ func Start(args []string) error {
 		}
 		fmt.Fprintf(os.Stderr, "\nVM %q started (%g vCPUs, %d MiB, %s, %s)\n", vm.Name, vm.CPUs, vm.Memory, netInfo, diskInfo)
 	}
+	if *detach {
+		fmt.Fprintf(os.Stderr, "Waiting for VM to boot...")
+		if err := vm.WaitForSSH(30 * time.Second); err != nil {
+			fmt.Fprintf(os.Stderr, " failed\n")
+			return err
+		}
+		fmt.Fprintf(os.Stderr, " ready\n")
+	}
 	fmt.Fprintf(os.Stderr, "  ssh -p %d root@localhost\n", vm.Port)
+	if *detach {
+		fmt.Fprintf(os.Stderr, "  knaller stop --name %s\n\n", vm.Name)
+		return nil
+	}
 	fmt.Fprintf(os.Stderr, "  Press Ctrl+C to stop\n\n")
 
 	// Catch Ctrl+C and SIGTERM to gracefully shut down the VM before exiting.
