@@ -188,7 +188,7 @@ func TestNamespaceSetupScript(t *testing.T) {
 		GuestMAC:  "AA:FC:00:01:02:03",
 	}
 
-	script := namespaceSetupScript(nc, "/usr/bin/firecracker", "/tmp/test.socket")
+	script := namespaceSetupScript(nc, nil, "/usr/bin/firecracker", "/tmp/test.socket")
 
 	// Should contain all expected commands
 	expects := []string{

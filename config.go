@@ -9,25 +9,32 @@ import (
 	"os"
 )
 
+// PortMapping maps a host port to a guest port for TCP forwarding.
+type PortMapping struct {
+	Host  int
+	Guest int
+}
+
 // Config describes a microVM to start. At minimum, Kernel and RootFS must be
 // set. Knaller starts a Firecracker process, connects to its API socket,
 // configures the VM, and boots it. Interact with the running VM via SSH
 // (the SSH port is returned in VM.Port).
 type Config struct {
-	Name           string    // VM name (random 8-char hex if empty)
-	Kernel         string    // path to vmlinux kernel image
-	RootFS         string    // path to base rootfs ext4 image (copied per-VM)
-	CPUs           float64   // vCPUs (default: 1, e.g. 0.5 = 1 vCPU at 50% quota)
-	Memory         int       // memory in MiB (default: 1024, minimum: 128)
-	NetworkMbps    float64   // network bandwidth limit in Mbps per direction (0 = unlimited)
-	DiskMBps       int       // disk bandwidth limit in MB/s (0 = unlimited)
-	DiskIOPS       int       // disk I/O operations per second limit (0 = unlimited)
-	SnapshotID     string    // restore from this snapshot instead of booting fresh
-	Detach         bool      // start VM in background (survives terminal close)
-	FirecrackerBin string    // path to firecracker binary (default: "firecracker")
-	PastaBin       string    // path to pasta binary (default: "pasta")
-	Stdout         io.Writer // serial console log output (default: io.Discard)
-	Stderr         io.Writer // firecracker process stderr (default: io.Discard)
+	Name           string        // VM name (random 8-char hex if empty)
+	Kernel         string        // path to vmlinux kernel image
+	RootFS         string        // path to base rootfs ext4 image (copied per-VM)
+	CPUs           float64       // vCPUs (default: 1, e.g. 0.5 = 1 vCPU at 50% quota)
+	Memory         int           // memory in MiB (default: 1024, minimum: 128)
+	NetworkMbps    float64       // network bandwidth limit in Mbps per direction (0 = unlimited)
+	DiskMBps       int           // disk bandwidth limit in MB/s (0 = unlimited)
+	DiskIOPS       int           // disk I/O operations per second limit (0 = unlimited)
+	Ports          []PortMapping // additional TCP port forwarding (host:guest)
+	SnapshotID     string        // restore from this snapshot instead of booting fresh
+	Detach         bool          // start VM in background (survives terminal close)
+	FirecrackerBin string        // path to firecracker binary (default: "firecracker")
+	PastaBin       string        // path to pasta binary (default: "pasta")
+	Stdout         io.Writer     // serial console log output (default: io.Discard)
+	Stderr         io.Writer     // firecracker process stderr (default: io.Discard)
 }
 
 // setDefaults fills in zero-value fields with sensible defaults.

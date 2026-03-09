@@ -7,12 +7,35 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
 
 	"github.com/benben/knaller"
 )
+
+// portList implements flag.Value for repeatable --port flags.
+type portList []knaller.PortMapping
+
+func (p *portList) String() string { return "" }
+
+func (p *portList) Set(val string) error {
+	host, guest, ok := strings.Cut(val, ":")
+	if !ok {
+		return fmt.Errorf("invalid port mapping %q, expected HOST:GUEST", val)
+	}
+	h, err := strconv.Atoi(host)
+	if err != nil {
+		return fmt.Errorf("invalid host port %q", host)
+	}
+	g, err := strconv.Atoi(guest)
+	if err != nil {
+		return fmt.Errorf("invalid guest port %q", guest)
+	}
+	*p = append(*p, knaller.PortMapping{Host: h, Guest: g})
+	return nil
+}
 
 // Start implements the "knaller start" subcommand. It starts a Firecracker
 // microVM, prints the SSH connection info, and blocks until the VM exits.
@@ -27,6 +50,8 @@ func Start(args []string) error {
 	netBw := fs.Float64("network-bandwidth", 0, "Network bandwidth limit in Mbps per direction (0 = unlimited)")
 	diskBw := fs.Int("disk-bandwidth", 0, "Disk bandwidth limit in MB/s (0 = unlimited)")
 	diskIOPS := fs.Int("disk-iops", 0, "Disk I/O operations per second limit (0 = unlimited)")
+	var ports portList
+	fs.Var(&ports, "port", "Port forwarding HOST:GUEST (repeatable)")
 	fromSnapshot := fs.String("from-snapshot", "", "Restore from snapshot ID")
 	fcBin := fs.String("firecracker", "firecracker", "Firecracker binary path")
 	pastaBin := fs.String("pasta", "pasta", "pasta binary path")
@@ -47,6 +72,7 @@ func Start(args []string) error {
 		NetworkMbps:    *netBw,
 		DiskMBps:       *diskBw,
 		DiskIOPS:       *diskIOPS,
+		Ports:          ports,
 		SnapshotID:     *fromSnapshot,
 		FirecrackerBin: *fcBin,
 		PastaBin:       *pastaBin,

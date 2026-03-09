@@ -130,14 +130,15 @@ func Run(ctx context.Context, cfg *Config) (*VM, error) {
 	// second TAP for Firecracker's guest NIC, configures IP forwarding, NAT,
 	// and DNAT (so pasta's SSH port forwarding reaches the guest), then exec's
 	// Firecracker. All without root — pasta provides CAP_NET_ADMIN in the namespace.
-	script := namespaceSetupScript(nc, cfg.FirecrackerBin, socketPath)
+	script := namespaceSetupScript(nc, cfg.Ports, cfg.FirecrackerBin, socketPath)
 	pastaArgs := []string{
 		"--config-net",
 		"-t", fmt.Sprintf("%d:22", nc.SSHPort),
-		"-4", "-f",
-		"--",
-		"sh", "-c", script,
 	}
+	for _, p := range cfg.Ports {
+		pastaArgs = append(pastaArgs, "-t", fmt.Sprintf("%d:%d", p.Host, p.Guest))
+	}
+	pastaArgs = append(pastaArgs, "-4", "-f", "--", "sh", "-c", script)
 
 	// Compute actual vCPU count (Firecracker requires integer vCPUs).
 	// Fractional values like 0.5 mean "1 vCPU at 50% CPU quota" — the quota

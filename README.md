@@ -87,6 +87,8 @@ Usage of start:
         Network bandwidth limit in Mbps per direction (0 = unlimited)
   -pasta string
         pasta binary path (default "pasta")
+  -port HOST:GUEST
+        Port forwarding HOST:GUEST (repeatable)
   -rootfs string
         Base rootfs path (default "~/.local/share/knaller/rootfs.ext4")
   -verbose

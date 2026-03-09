@@ -48,15 +48,21 @@ func deriveNetwork(name string) *networkConfig {
 //	          → masquerade → tap0 → pasta L4 translation → host internet
 //	Inbound:  host:<ssh_port> → pasta → tap0 → DNAT to guest IP →
 //	          namespace kernel → kn-<name> → Firecracker → guest sshd
-func namespaceSetupScript(nc *networkConfig, fcBin, socketPath string) string {
+func namespaceSetupScript(nc *networkConfig, ports []PortMapping, fcBin, socketPath string) string {
 	subnetBase := net.IPv4(172, 16, nc.HostIP[len(nc.HostIP)-2], nc.HostIP[len(nc.HostIP)-1]&0xFC)
 	var b strings.Builder
 	fmt.Fprintf(&b, "ip tuntap add dev %s mode tap", nc.TAPDevice)
 	fmt.Fprintf(&b, " && ip addr add %s/30 dev %s", nc.HostIP, nc.TAPDevice)
 	fmt.Fprintf(&b, " && ip link set %s up", nc.TAPDevice)
 	fmt.Fprintf(&b, " && sysctl -qw net.ipv4.ip_forward=1")
-	fmt.Fprintf(&b, " && nft 'add table ip nat; add chain ip nat prerouting { type nat hook prerouting priority -100 ; }; add chain ip nat output { type nat hook output priority -100 ; }; add chain ip nat postrouting { type nat hook postrouting priority 100 ; }; add rule ip nat prerouting tcp dport 22 dnat to %s; add rule ip nat output tcp dport 22 dnat to %s; add rule ip nat postrouting ip saddr %s/30 oifname != \"%s\" masquerade'",
-		nc.GuestIP, nc.GuestIP, subnetBase, nc.TAPDevice)
+	fmt.Fprintf(&b, " && nft 'add table ip nat; add chain ip nat prerouting { type nat hook prerouting priority -100 ; }; add chain ip nat output { type nat hook output priority -100 ; }; add chain ip nat postrouting { type nat hook postrouting priority 100 ; }; add rule ip nat prerouting tcp dport 22 dnat to %s; add rule ip nat output tcp dport 22 dnat to %s",
+		nc.GuestIP, nc.GuestIP)
+	for _, p := range ports {
+		fmt.Fprintf(&b, "; add rule ip nat prerouting tcp dport %d dnat to %s:%d", p.Guest, nc.GuestIP, p.Guest)
+		fmt.Fprintf(&b, "; add rule ip nat output tcp dport %d dnat to %s:%d", p.Guest, nc.GuestIP, p.Guest)
+	}
+	fmt.Fprintf(&b, "; add rule ip nat postrouting ip saddr %s/30 oifname != \"%s\" masquerade'",
+		subnetBase, nc.TAPDevice)
 	fmt.Fprintf(&b, " && exec %s --api-sock %s --enable-pci", fcBin, socketPath)
 	return b.String()
 }
