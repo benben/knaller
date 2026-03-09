@@ -58,8 +58,8 @@ func namespaceSetupScript(nc *networkConfig, ports []PortMapping, fcBin, socketP
 	fmt.Fprintf(&b, " && nft 'add table ip nat; add chain ip nat prerouting { type nat hook prerouting priority -100 ; }; add chain ip nat output { type nat hook output priority -100 ; }; add chain ip nat postrouting { type nat hook postrouting priority 100 ; }; add rule ip nat prerouting tcp dport 22 dnat to %s; add rule ip nat output tcp dport 22 dnat to %s",
 		nc.GuestIP, nc.GuestIP)
 	for _, p := range ports {
-		fmt.Fprintf(&b, "; add rule ip nat prerouting tcp dport %d dnat to %s:%d", p.Guest, nc.GuestIP, p.Guest)
-		fmt.Fprintf(&b, "; add rule ip nat output tcp dport %d dnat to %s:%d", p.Guest, nc.GuestIP, p.Guest)
+		fmt.Fprintf(&b, "; add rule ip nat prerouting tcp dport %d dnat to %s", p.Guest, nc.GuestIP)
+		fmt.Fprintf(&b, "; add rule ip nat output tcp dport %d dnat to %s", p.Guest, nc.GuestIP)
 	}
 	fmt.Fprintf(&b, "; add rule ip nat postrouting ip saddr %s/30 oifname != \"%s\" masquerade'",
 		subnetBase, nc.TAPDevice)

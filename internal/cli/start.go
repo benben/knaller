@@ -144,9 +144,10 @@ func Start(args []string) error {
 	// Block until the Firecracker process exits (guest shut down or killed).
 	vm.Wait()
 
-	// Clean up all resources: socket, rootfs copy.
-	vm.Cleanup()
-	fmt.Fprintf(os.Stderr, "\nVM stopped and cleaned up.\n")
+	// Remove the stale socket. The rootfs is kept so the VM shows as
+	// "Stopped" in knaller ls. Use "knaller rm" to fully remove it.
+	os.Remove(vm.SocketPath)
+	fmt.Fprintf(os.Stderr, "\nVM stopped.\n")
 	return nil
 }
 

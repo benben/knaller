@@ -2,6 +2,7 @@ package knaller
 
 import (
 	"bufio"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -117,4 +118,28 @@ func resolvedUpstreams() []string {
 // removeDisk deletes the per-VM data directory including the rootfs copy.
 func removeDisk(name string) error {
 	return os.RemoveAll(vmDataDir(name))
+}
+
+// saveVMPorts writes the port mappings to the VM data directory so they can
+// be included in snapshots.
+func saveVMPorts(name string, ports []PortMapping) error {
+	if len(ports) == 0 {
+		return nil
+	}
+	data, err := json.Marshal(ports)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(vmDataDir(name), "ports.json"), data, 0o644)
+}
+
+// loadVMPorts reads the port mappings from the VM data directory.
+func loadVMPorts(name string) []PortMapping {
+	data, err := os.ReadFile(filepath.Join(vmDataDir(name), "ports.json"))
+	if err != nil {
+		return nil
+	}
+	var ports []PortMapping
+	json.Unmarshal(data, &ports)
+	return ports
 }

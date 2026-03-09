@@ -23,7 +23,7 @@ func Snapshot(args []string) error {
 		switch args[0] {
 		case "ls":
 			return snapshotList()
-		case "delete":
+		case "delete", "rm":
 			return snapshotDelete(args[1:])
 		}
 	}

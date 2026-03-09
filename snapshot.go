@@ -19,11 +19,12 @@ import (
 // Snapshot holds the metadata stored alongside a Firecracker snapshot.
 // Written to metadata.json in the snapshot directory.
 type Snapshot struct {
-	ID         string    `json:"id"`
-	VMName     string    `json:"vm_name"`
-	CreatedAt  time.Time `json:"created_at"`
-	VCPUs      int       `json:"vcpus"`
-	MemSizeMib int       `json:"mem_size_mib"`
+	ID         string        `json:"id"`
+	VMName     string        `json:"vm_name"`
+	CreatedAt  time.Time     `json:"created_at"`
+	VCPUs      int           `json:"vcpus"`
+	MemSizeMib int           `json:"mem_size_mib"`
+	Ports      []PortMapping `json:"ports,omitempty"`
 }
 
 // snapshotID generates a random snapshot ID with the "snap_" prefix.
@@ -131,6 +132,7 @@ func CreateSnapshot(ctx context.Context, vmName string, w io.Writer) (string, er
 		ID:        id,
 		VMName:    vmName,
 		CreatedAt: time.Now(),
+		Ports:     loadVMPorts(vmName),
 	}
 	if vmCfg.MachineConfig != nil {
 		meta.VCPUs = vmCfg.MachineConfig.VcpuCount

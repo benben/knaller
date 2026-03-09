@@ -12,14 +12,15 @@ import (
 )
 
 // setTestHome overrides HOME so socketDirectory() and vmDataDir() use a temp
-// directory. Returns the sockets directory path.
+// directory. Returns the base knaller data directory.
 func setTestHome(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
 	t.Setenv("HOME", dir)
-	// Create the sockets dir so List() finds it.
-	os.MkdirAll(filepath.Join(dir, ".local", "share", "knaller", "sockets"), 0o755)
-	return filepath.Join(dir, ".local", "share", "knaller", "sockets")
+	base := filepath.Join(dir, ".local", "share", "knaller")
+	os.MkdirAll(filepath.Join(base, "sockets"), 0o755)
+	os.MkdirAll(filepath.Join(base, "vms"), 0o755)
+	return base
 }
 
 func TestListEmptyDir(t *testing.T) {
@@ -37,22 +38,25 @@ func TestListEmptyDir(t *testing.T) {
 func TestListNoDir(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("HOME", dir)
-	// Don't create the sockets dir — List() should handle missing dir.
+	// Don't create any dirs — List() should handle missing dirs.
 
 	vms, err := List()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if vms != nil {
-		t.Errorf("expected nil, got %v", vms)
+	if len(vms) != 0 {
+		t.Errorf("expected 0 VMs, got %d", len(vms))
 	}
 }
 
 func TestListWithMockSocket(t *testing.T) {
-	socketDir := setTestHome(t)
+	base := setTestHome(t)
+
+	// Create a VM data directory so List() discovers it.
+	os.MkdirAll(filepath.Join(base, "vms", "testvm"), 0o755)
 
 	// Create a mock Firecracker server
-	socketPath := filepath.Join(socketDir, "testvm.socket")
+	socketPath := filepath.Join(base, "sockets", "testvm.socket")
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/" {
@@ -112,18 +116,52 @@ func TestListWithMockSocket(t *testing.T) {
 	}
 }
 
-func TestListStaleSocket(t *testing.T) {
-	socketDir := setTestHome(t)
+func TestListStoppedVM(t *testing.T) {
+	base := setTestHome(t)
 
-	// Create a stale socket file (regular file, no listener)
-	os.WriteFile(filepath.Join(socketDir, "stale.socket"), nil, 0o644)
+	// Create a VM data directory with no live socket — should appear as Stopped.
+	os.MkdirAll(filepath.Join(base, "vms", "stoppedvm"), 0o755)
 
 	vms, err := List()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(vms) != 0 {
-		t.Errorf("expected 0 VMs (stale socket should be skipped), got %d", len(vms))
+	if len(vms) != 1 {
+		t.Fatalf("expected 1 VM, got %d", len(vms))
+	}
+	if vms[0].Status != "Stopped" {
+		t.Errorf("status = %q, want Stopped", vms[0].Status)
+	}
+	if vms[0].Name != "stoppedvm" {
+		t.Errorf("name = %q, want stoppedvm", vms[0].Name)
+	}
+}
+
+func TestMergeUniquePorts(t *testing.T) {
+	tests := []struct {
+		name string
+		a, b []PortMapping
+		want []PortMapping
+	}{
+		{"no overlap", []PortMapping{{5432, 5432}}, []PortMapping{{8080, 80}}, []PortMapping{{5432, 5432}, {8080, 80}}},
+		{"exact duplicate", []PortMapping{{5432, 5432}}, []PortMapping{{5432, 5432}}, []PortMapping{{5432, 5432}}},
+		{"host port conflict", []PortMapping{{5432, 5432}}, []PortMapping{{5432, 3306}}, []PortMapping{{5432, 5432}}},
+		{"both nil", nil, nil, nil},
+		{"a nil", nil, []PortMapping{{80, 80}}, []PortMapping{{80, 80}}},
+		{"b nil", []PortMapping{{80, 80}}, nil, []PortMapping{{80, 80}}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := mergeUniquePorts(tt.a, tt.b)
+			if len(got) != len(tt.want) {
+				t.Fatalf("len = %d, want %d: %v", len(got), len(tt.want), got)
+			}
+			for i := range got {
+				if got[i] != tt.want[i] {
+					t.Errorf("[%d] = %v, want %v", i, got[i], tt.want[i])
+				}
+			}
+		})
 	}
 }
 

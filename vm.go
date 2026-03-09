@@ -77,6 +77,10 @@ func Run(ctx context.Context, cfg *Config) (*VM, error) {
 		if err != nil {
 			return nil, err
 		}
+		// Merge snapshot ports with CLI-specified ports. Deduplicate so that
+		// re-specifying the same port on the CLI doesn't produce duplicate
+		// pasta -t args (which causes pasta to exit with a conflict error).
+		cfg.Ports = mergeUniquePorts(snap.Ports, cfg.Ports)
 	}
 
 	// Each VM gets a socket at /tmp/knaller/<name>.socket (or $XDG_RUNTIME_DIR/knaller/).
@@ -223,6 +227,7 @@ func Run(ctx context.Context, cfg *Config) (*VM, error) {
 		if memory == 0 {
 			memory = cfg.Memory
 		}
+		saveVMPorts(cfg.Name, cfg.Ports)
 		return &VM{
 			Name:       cfg.Name,
 			PID:        cmd.Process.Pid,
@@ -321,6 +326,7 @@ func Run(ctx context.Context, cfg *Config) (*VM, error) {
 		return nil, fmt.Errorf("start instance: %w", err)
 	}
 
+	saveVMPorts(cfg.Name, cfg.Ports)
 	return &VM{
 		Name:       cfg.Name,
 		PID:        cmd.Process.Pid,
@@ -383,6 +389,30 @@ func (vm *VM) Cleanup() error {
 	return errors.Join(errs...)
 }
 
+// RemoveVM deletes a stopped VM's data directory and any stale socket. Returns
+// an error if the VM is still running.
+func RemoveVM(name string) error {
+	// Check if the VM is still running by trying to connect to its socket.
+	socketPath := filepath.Join(socketDirectory(), name+".socket")
+	client := firecracker.NewClient(socketPath)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	_, err := client.GetInfo(ctx)
+	cancel()
+	if err == nil {
+		return fmt.Errorf("VM %q is still running, stop it first", name)
+	}
+
+	// Check the VM data dir exists.
+	dir := vmDataDir(name)
+	if _, err := os.Stat(dir); err != nil {
+		return fmt.Errorf("VM %q not found", name)
+	}
+
+	// Clean up stale socket and VM data.
+	os.Remove(socketPath)
+	return removeDisk(name)
+}
+
 // StopVM stops a running VM by name. It connects to the VM's Firecracker API
 // socket and sends Ctrl+Alt+Del to trigger a graceful guest shutdown. This is
 // used by "knaller stop" to stop a VM from a different terminal.
@@ -416,30 +446,26 @@ func ResumeVM(ctx context.Context, name string) error {
 	return client.ResumeVM(ctx)
 }
 
-// List discovers running VMs by scanning the socket directory and querying each
-// Firecracker instance via its API. We don't keep any state files — a socket
-// that responds to API calls means the VM is running. Stale sockets (from
-// crashed VMs) are silently skipped.
+// List discovers all VMs — both running and stopped. Running/paused VMs are
+// found by scanning the socket directory and querying the Firecracker API.
+// Stopped VMs are found by scanning the per-VM data directory for entries that
+// don't have a live socket.
 func List() ([]*VM, error) {
-	dir := socketDirectory()
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, nil
-		}
+	seen := map[string]*VM{}
+
+	// First pass: find running/paused VMs via their API sockets.
+	socketDir := socketDirectory()
+	socketEntries, err := os.ReadDir(socketDir)
+	if err != nil && !os.IsNotExist(err) {
 		return nil, err
 	}
-
-	var vms []*VM
-	for _, e := range entries {
+	for _, e := range socketEntries {
 		if !strings.HasSuffix(e.Name(), ".socket") {
 			continue
 		}
 		name := strings.TrimSuffix(e.Name(), ".socket")
-		socketPath := filepath.Join(dir, e.Name())
+		socketPath := filepath.Join(socketDir, e.Name())
 
-		// Try to connect to the Firecracker API. If this fails, the socket is
-		// stale (the VM crashed or was killed without cleanup) — just skip it.
 		client := firecracker.NewClient(socketPath)
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		info, err := client.GetInfo(ctx)
@@ -456,26 +482,52 @@ func List() ([]*VM, error) {
 			client:     client,
 		}
 
-		// Fetch the full VM config to get CPU count and memory.
 		vmCfg, err := client.GetVMConfig(ctx)
-		if err == nil {
-			if vmCfg.MachineConfig != nil {
-				vm.CPUs = float64(vmCfg.MachineConfig.VcpuCount)
-				vm.Memory = vmCfg.MachineConfig.MemSizeMib
-			}
+		if err == nil && vmCfg.MachineConfig != nil {
+			vm.CPUs = float64(vmCfg.MachineConfig.VcpuCount)
+			vm.Memory = vmCfg.MachineConfig.MemSizeMib
 		}
 		cancel()
 
-		// Use the socket file's modification time as a rough start time.
 		fi, err := e.Info()
 		if err == nil {
 			vm.StartedAt = fi.ModTime()
 		}
-
-		// Find the Firecracker process PID by scanning /proc for a process
-		// whose command line mentions this socket path.
 		vm.PID = findFirecrackerPID(socketPath)
 
+		seen[name] = vm
+	}
+
+	// Second pass: find stopped VMs from the data directory.
+	home, _ := os.UserHomeDir()
+	vmsDir := filepath.Join(home, ".local", "share", "knaller", "vms")
+	vmEntries, err := os.ReadDir(vmsDir)
+	if err != nil && !os.IsNotExist(err) {
+		return nil, err
+	}
+	for _, e := range vmEntries {
+		if !e.IsDir() {
+			continue
+		}
+		name := e.Name()
+		if seen[name] != nil {
+			continue // already found as running
+		}
+		vm := &VM{
+			Name:       name,
+			SocketPath: filepath.Join(socketDir, name+".socket"),
+			Status:     "Stopped",
+			Port:       sshPort(name),
+		}
+		fi, err := e.Info()
+		if err == nil {
+			vm.StartedAt = fi.ModTime()
+		}
+		seen[name] = vm
+	}
+
+	vms := make([]*VM, 0, len(seen))
+	for _, vm := range seen {
 		vms = append(vms, vm)
 	}
 	return vms, nil
@@ -560,3 +612,23 @@ type pipeWriter struct{ w io.Writer }
 func (pw pipeWriter) Write(p []byte) (int, error) { return pw.w.Write(p) }
 
 func writerOf(w io.Writer) io.Writer { return pipeWriter{w} }
+
+// mergeUniquePorts combines two port lists, deduplicating by Host port.
+// Ports from a take precedence over ports from b when there's a conflict.
+func mergeUniquePorts(a, b []PortMapping) []PortMapping {
+	seen := map[int]bool{}
+	var result []PortMapping
+	for _, p := range a {
+		if !seen[p.Host] {
+			seen[p.Host] = true
+			result = append(result, p)
+		}
+	}
+	for _, p := range b {
+		if !seen[p.Host] {
+			seen[p.Host] = true
+			result = append(result, p)
+		}
+	}
+	return result
+}

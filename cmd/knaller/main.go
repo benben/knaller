@@ -32,6 +32,7 @@ func dispatch(args []string) error {
 	cmds := map[string]func([]string) error{
 		"start":    cli.Start,
 		"stop":     cli.Stop,
+		"rm":       cli.Rm,
 		"pause":    cli.Pause,
 		"resume":   cli.Resume,
 		"snapshot": cli.Snapshot,
@@ -65,6 +66,7 @@ func usage() {
 	fmt.Fprintln(os.Stderr, "Commands:")
 	fmt.Fprintln(os.Stderr, "  start             Start a microVM (connect via SSH)")
 	fmt.Fprintln(os.Stderr, "  stop              Stop a running microVM")
+	fmt.Fprintln(os.Stderr, "  rm                Remove a stopped microVM")
 	fmt.Fprintln(os.Stderr, "  pause             Pause a running microVM")
 	fmt.Fprintln(os.Stderr, "  resume            Resume a paused microVM")
 	fmt.Fprintln(os.Stderr, "  snapshot          Create a VM snapshot")

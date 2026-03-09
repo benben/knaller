@@ -47,6 +47,7 @@ Usage: knaller <command> [flags]
 Commands:
   start             Start a microVM (connect via SSH)
   stop              Stop a running microVM
+  rm                Remove a stopped microVM
   pause             Pause a running microVM
   resume            Resume a paused microVM
   snapshot          Create a VM snapshot
