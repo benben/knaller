@@ -8,6 +8,13 @@ import (
 	"strings"
 )
 
+// tapMAC is the fixed MAC address used for all TAP devices. Each VM runs in
+// its own network namespace so there's no conflict. Using a fixed MAC is
+// critical for snapshot restore: the guest's ARP cache remembers the TAP's
+// MAC from snapshot time, so it must be the same after restore to avoid a
+// 15-45 second delay while the guest's stale ARP entry expires.
+const tapMAC = "AA:FC:01:00:00:00"
+
 // networkConfig holds the networking details for a single VM. The TAP device
 // name, IPs, MAC, and SSH port are all derived deterministically from the VM
 // name.
@@ -53,6 +60,7 @@ func namespaceSetupScript(nc *networkConfig, ports []PortMapping, fcBin, socketP
 	var b strings.Builder
 	fmt.Fprintf(&b, "ip tuntap add dev %s mode tap", nc.TAPDevice)
 	fmt.Fprintf(&b, " && ip addr add %s/30 dev %s", nc.HostIP, nc.TAPDevice)
+	fmt.Fprintf(&b, " && ip link set dev %s address %s", nc.TAPDevice, tapMAC)
 	fmt.Fprintf(&b, " && ip link set %s up", nc.TAPDevice)
 	fmt.Fprintf(&b, " && sysctl -qw net.ipv4.ip_forward=1")
 	fmt.Fprintf(&b, " && nft 'add table ip nat; add chain ip nat prerouting { type nat hook prerouting priority -100 ; }; add chain ip nat output { type nat hook output priority -100 ; }; add chain ip nat postrouting { type nat hook postrouting priority 100 ; }; add rule ip nat prerouting tcp dport 22 dnat to %s; add rule ip nat output tcp dport 22 dnat to %s",
