@@ -190,3 +190,111 @@ func TestParseGuestIP(t *testing.T) {
 		}
 	}
 }
+
+// startMockFirecracker stands up a fake firecracker API on a Unix socket and
+// returns the socket path. It answers GET / with a Running InstanceInfo so
+// AdoptVM's GetInfo health check passes.
+func startMockFirecracker(t *testing.T, name string) string {
+	t.Helper()
+	base := setTestHome(t)
+	socketPath := filepath.Join(base, "sockets", name+".socket")
+	mux := http.NewServeMux()
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(firecracker.InstanceInfo{
+			State:      "Running",
+			VmmVersion: "1.14.1",
+		})
+	})
+	ln, err := net.Listen("unix", socketPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := &http.Server{Handler: mux}
+	go srv.Serve(ln)
+	t.Cleanup(func() {
+		srv.Close()
+		ln.Close()
+	})
+	return socketPath
+}
+
+func TestAdoptVMSuccess(t *testing.T) {
+	name := "adoptme"
+	socketPath := startMockFirecracker(t, name)
+
+	// os.Getpid() is guaranteed alive — kill -0 will succeed.
+	vm, err := AdoptVM(name, socketPath, os.Getpid())
+	if err != nil {
+		t.Fatalf("AdoptVM: %v", err)
+	}
+	if vm.Name != name {
+		t.Errorf("Name = %q, want %q", vm.Name, name)
+	}
+	if vm.PID != os.Getpid() {
+		t.Errorf("PID = %d, want %d", vm.PID, os.Getpid())
+	}
+	if vm.SocketPath != socketPath {
+		t.Errorf("SocketPath = %q, want %q", vm.SocketPath, socketPath)
+	}
+	if vm.Status != "Running" {
+		t.Errorf("Status = %q, want Running", vm.Status)
+	}
+	if vm.Port == 0 {
+		t.Error("expected non-zero Port (derived from name)")
+	}
+	if vm.cmd != nil {
+		t.Error("expected cmd == nil for adopted VM")
+	}
+	if vm.client == nil {
+		t.Error("expected client to be set")
+	}
+}
+
+func TestAdoptVMInvalidPID(t *testing.T) {
+	if _, err := AdoptVM("x", "/tmp/does-not-matter", 0); err == nil {
+		t.Fatal("expected error for pid=0")
+	}
+	if _, err := AdoptVM("x", "/tmp/does-not-matter", -1); err == nil {
+		t.Fatal("expected error for negative pid")
+	}
+}
+
+func TestAdoptVMDeadPID(t *testing.T) {
+	socketPath := startMockFirecracker(t, "deadpid")
+
+	// PID_MAX_LIMIT on Linux is 2^22 = 4194304; using 4194303 is virtually
+	// guaranteed to be unallocated. We don't care about the exact errno —
+	// just that AdoptVM bails before opening the socket.
+	deadPID := 4194303
+	if _, err := AdoptVM("deadpid", socketPath, deadPID); err == nil {
+		t.Fatal("expected error for dead pid")
+	}
+}
+
+func TestAdoptVMMissingSocket(t *testing.T) {
+	dir := setTestHome(t)
+	missing := filepath.Join(dir, "sockets", "ghost.socket")
+
+	if _, err := AdoptVM("ghost", missing, os.Getpid()); err == nil {
+		t.Fatal("expected error for missing socket")
+	}
+}
+
+func TestVMKillNoOpWithZeroPID(t *testing.T) {
+	// An adopted VM with cmd=nil and PID<=0 is a degenerate case (the
+	// caller misused the type), but Kill should not panic — it should
+	// be a clean no-op.
+	vm := &VM{Name: "x"}
+	if err := vm.Kill(); err != nil {
+		t.Fatalf("Kill on zero-PID adopted VM: %v", err)
+	}
+}
+
+func TestVMWaitNoOpWithZeroPID(t *testing.T) {
+	vm := &VM{Name: "x"}
+	// Wait on a zero-PID adopted VM returns immediately with no error.
+	if err := vm.Wait(); err != nil {
+		t.Fatalf("Wait on zero-PID adopted VM: %v", err)
+	}
+}
