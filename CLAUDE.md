@@ -44,13 +44,15 @@ knaller/
   printed on start and available via `knaller list`.
 
 - **Two networking modes.** `Run` puts the VM in a pasta-managed user+network
-  namespace (rootless, no privileges). `RunDirect` puts it in a per-VM kernel
-  network namespace and `nsenter`'s firecracker into it (requires CAP_NET_ADMIN
-  + CAP_NET_RAW in the host netns, but works inside Kubernetes pods where pasta's
-  user namespace breaks `KVM_CREATE_VM`). RunDirect manages two nft tables —
-  `knaller_box_nat` per-netns and `knaller_host` shared — for in/out NAT and a
-  default-deny egress filter that lets guests reach the internet but blocks them
-  from the host's RFC1918 neighbours.
+  namespace (rootless, no privileges). `RunDirect` is **not rootless** — it
+  puts the VM in a per-VM kernel network namespace and `nsenter`'s firecracker
+  into it. The supervisor needs CAP_NET_ADMIN + CAP_SYS_ADMIN + CAP_NET_RAW in
+  the host netns (i.e. root or root-equivalent), and also write access to
+  `/sys/fs/cgroup` if `EscapeCgroupSlice` is set. The trade-off pays for itself
+  inside Kubernetes pods where pasta's user namespace breaks `KVM_CREATE_VM`.
+  RunDirect manages two nft tables — `knaller_box_nat` per-netns and
+  `knaller_host` shared — for in/out NAT and a default-deny egress filter that
+  lets guests reach the internet but blocks the host's RFC1918 neighbours.
 
 - **Per-VM rootfs copies.** Each VM gets its own copy of the base rootfs at
   `~/.local/share/knaller/vms/<name>/rootfs.ext4`, using `cp --reflink=auto`

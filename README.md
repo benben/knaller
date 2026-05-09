@@ -19,7 +19,7 @@ knaller ([/ˈknalɐ/](https://de.wiktionary.org/wiki/Knaller)) — a Go library 
 - Linux with KVM
 - [Firecracker binary](https://github.com/firecracker-microvm/firecracker/releases)
 - For rootless mode: [pasta](https://passt.top/)
-- For direct mode: `iproute2`, `nftables`, `util-linux` (`nsenter`); `CAP_NET_ADMIN` + `CAP_NET_RAW` in the host netns. `e2fsprogs` is also needed if you use `Config.RootFSSize`.
+- For direct mode (**not rootless**): `iproute2`, `nftables`, `util-linux` (`nsenter`) on `PATH`. The supervisor needs `CAP_NET_ADMIN` + `CAP_NET_RAW` + `CAP_SYS_ADMIN` in the host network namespace — in practice that means running as root, or as a Kubernetes pod with `hostNetwork: true` plus a privileged security context. `e2fsprogs` is also required if you use `Config.RootFSSize`. If you set `Config.EscapeCgroupSlice`, the supervisor must additionally be able to write under `/sys/fs/cgroup`.
 - Podman for building the guest rootfs image
 
 ## Install
@@ -167,10 +167,17 @@ What direct mode sets up per VM:
 
 Required capabilities and binaries:
 
-- The supervisor must hold `CAP_NET_ADMIN` + `CAP_NET_RAW` in the host
-  network namespace. In Kubernetes that means `hostNetwork: true` plus the
-  capability set; on a bare host it means root or file capabilities.
+- **Direct mode is not rootless.** The supervisor needs `CAP_NET_ADMIN`
+  (for `ip link`, `nft`, sysctls) plus `CAP_SYS_ADMIN` (to create the
+  kernel netns and `nsenter` into it) plus `CAP_NET_RAW`, all in the host
+  network namespace. In Kubernetes that's `hostNetwork: true` plus a
+  privileged security context (or the explicit capability set); on a bare
+  host it means running as root or granting the equivalent file
+  capabilities to the binary.
 - `ip` (iproute2), `nft` (nftables), `nsenter` (util-linux) on `PATH`.
+- If you set `Config.EscapeCgroupSlice`, the supervisor must also be able
+  to write into `/sys/fs/cgroup` (i.e. the host cgroupv2 hierarchy must be
+  mounted RW and visible to the process).
 
 ```go
 vm, err := knaller.RunDirect(ctx, &knaller.Config{

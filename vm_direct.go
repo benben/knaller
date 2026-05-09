@@ -10,13 +10,16 @@
 // user+network namespace, which breaks KVM). The kernel netns we create here
 // does not interfere with KVM.
 //
-// Direct mode requires the caller to hold CAP_NET_ADMIN + CAP_NET_RAW in the
-// host network namespace. In Kubernetes that means hostNetwork: true plus the
-// right capability set; on a bare host you must run as root or grant the
-// capabilities to the binary.
+// Direct mode is NOT rootless. The caller needs CAP_NET_ADMIN (ip, nft,
+// sysctls) plus CAP_SYS_ADMIN (ip netns add, nsenter into a netns) plus
+// CAP_NET_RAW, all in the host network namespace. In Kubernetes that's
+// hostNetwork: true plus a privileged security context (or the explicit
+// capability set); on a bare host it means running as root or granting the
+// equivalent file capabilities to the binary.
 //
-// Tooling required on the host PATH: ip, nft, nsenter (all from iproute2 +
-// nftables + util-linux). e2fsprogs is required if you also use RootFSSize.
+// Tooling required on the host PATH: ip (iproute2), nft (nftables), nsenter
+// (util-linux). e2fsprogs is required if you also use RootFSSize. If you
+// set EscapeCgroupSlice you also need write access under /sys/fs/cgroup.
 package knaller
 
 import (
