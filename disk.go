@@ -22,7 +22,11 @@ func vmDataDir(name string) string {
 // has its own writable filesystem. Uses cp --reflink=auto to get copy-on-write
 // behavior on filesystems that support it (btrfs, xfs), which makes the copy
 // nearly instant and only uses disk space for blocks that the VM actually changes.
-func prepareDisk(name, baseRootFS string) (string, error) {
+//
+// If rootFSSize > 0 and larger than the source image, the copy is grown
+// (truncate, then e2fsck -fp + resize2fs) so the guest sees the expanded
+// filesystem. Requires e2fsprogs (e2fsck, resize2fs) on PATH.
+func prepareDisk(name, baseRootFS string, rootFSSize int64) (string, error) {
 	dir := vmDataDir(name)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return "", fmt.Errorf("create vm dir: %w", err)
@@ -31,6 +35,28 @@ func prepareDisk(name, baseRootFS string) (string, error) {
 	cmd := exec.Command("cp", "--reflink=auto", baseRootFS, dst)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return "", fmt.Errorf("copy rootfs: %s: %w", out, err)
+	}
+	if rootFSSize > 0 {
+		st, err := os.Stat(dst)
+		if err != nil {
+			return "", fmt.Errorf("stat rootfs: %w", err)
+		}
+		if st.Size() < rootFSSize {
+			if err := os.Truncate(dst, rootFSSize); err != nil {
+				return "", fmt.Errorf("truncate rootfs to %d: %w", rootFSSize, err)
+			}
+			// e2fsck returns 1 for "errors fixed", which is fine on a
+			// fresh copy. Only escalate on >=4 (unfixed errors), per
+			// e2fsck(8) exit codes.
+			if out, err := exec.Command("e2fsck", "-fp", dst).CombinedOutput(); err != nil {
+				if exitErr, ok := err.(*exec.ExitError); !ok || exitErr.ExitCode() >= 4 {
+					return "", fmt.Errorf("e2fsck rootfs: %s: %w", out, err)
+				}
+			}
+			if out, err := exec.Command("resize2fs", dst).CombinedOutput(); err != nil {
+				return "", fmt.Errorf("resize2fs rootfs: %s: %w", out, err)
+			}
+		}
 	}
 	return dst, nil
 }

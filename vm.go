@@ -100,7 +100,7 @@ func Run(ctx context.Context, cfg *Config) (*VM, error) {
 	if snap != nil {
 		diskPath, err = prepareDiskFromSnapshot(cfg.Name, cfg.SnapshotID)
 	} else {
-		diskPath, err = prepareDisk(cfg.Name, cfg.RootFS)
+		diskPath, err = prepareDisk(cfg.Name, cfg.RootFS, cfg.RootFSSize)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("prepare disk: %w", err)
@@ -344,11 +344,83 @@ func Run(ctx context.Context, cfg *Config) (*VM, error) {
 
 // Wait blocks until the pasta process exits (which happens when Firecracker
 // exits, since it was exec'd). Returns any error from the process exit.
+//
+// For an adopted VM (cmd == nil because the process was inherited from a
+// previous lifetime via AdoptVM), Wait polls /proc/<pid> until the process
+// disappears. Useful for callers that survive across VM lifetimes (long-
+// running supervisors, adopted-VM watchers).
 func (vm *VM) Wait() error {
-	if vm.cmd == nil {
+	if vm.cmd != nil {
+		return vm.cmd.Wait()
+	}
+	if vm.PID <= 0 {
 		return nil
 	}
-	return vm.cmd.Wait()
+	proc, err := os.FindProcess(vm.PID)
+	if err != nil {
+		return nil
+	}
+	for {
+		if err := proc.Signal(syscall.Signal(0)); err != nil {
+			return nil // process is gone
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+}
+
+// Kill SIGKILLs the firecracker process directly. Use this as a fallback
+// when Stop + Wait time out — if the guest is hung (e.g., I/O errors on a
+// torn-down backing disk), Ctrl+Alt+Del has no effect and firecracker
+// hangs waiting for guest cooperation. Without forcing the kill, the
+// firecracker process keeps the underlying block device open and prevents
+// any new VM from claiming it.
+func (vm *VM) Kill() error {
+	if vm.cmd != nil && vm.cmd.Process != nil {
+		return vm.cmd.Process.Kill()
+	}
+	if vm.PID <= 0 {
+		return nil
+	}
+	if err := syscall.Kill(vm.PID, syscall.SIGKILL); err != nil && err != syscall.ESRCH {
+		return err
+	}
+	return nil
+}
+
+// AdoptVM constructs a *VM for an existing firecracker process that the
+// current process did not start. Used by long-running supervisors that need
+// to re-attach to VMs they were managing in a previous lifetime — the
+// caller persists pid + socket path + name out of band and replays them
+// here on startup.
+//
+// AdoptVM verifies the firecracker is alive (kill -0 against pid) AND its
+// API socket is responsive (GetInfo with a 2s timeout) before returning.
+// The resulting *VM has cmd=nil; Wait/Kill switch to /proc-based liveness.
+func AdoptVM(name, socketPath string, pid int) (*VM, error) {
+	if pid <= 0 {
+		return nil, fmt.Errorf("adopt %s: invalid pid %d", name, pid)
+	}
+	if err := syscall.Kill(pid, syscall.Signal(0)); err != nil {
+		return nil, fmt.Errorf("adopt %s: pid %d not alive: %w", name, pid, err)
+	}
+	if _, err := os.Stat(socketPath); err != nil {
+		return nil, fmt.Errorf("adopt %s: socket %s: %w", name, socketPath, err)
+	}
+	client := firecracker.NewClient(socketPath)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if _, err := client.GetInfo(ctx); err != nil {
+		return nil, fmt.Errorf("adopt %s: GetInfo: %w", name, err)
+	}
+	return &VM{
+		Name:       name,
+		PID:        pid,
+		SocketPath: socketPath,
+		StartedAt:  time.Now(),
+		Status:     "Running",
+		Port:       sshPort(name),
+		client:     client,
+	}, nil
 }
 
 // WaitForSSH polls the VM's SSH port until it accepts connections or the

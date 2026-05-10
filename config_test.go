@@ -140,6 +140,38 @@ func TestConfigValidateSnapshotSkipsKernelRootfs(t *testing.T) {
 	}
 }
 
+func TestConfigValidateRawDiskPathSkipsRootFS(t *testing.T) {
+	dir := t.TempDir()
+	kernel := filepath.Join(dir, "vmlinux")
+	os.WriteFile(kernel, []byte("fake"), 0o644)
+
+	// RawDiskPath is set; RootFS is intentionally empty + nonexistent.
+	cfg := &Config{Kernel: kernel, RawDiskPath: "/dev/nbd0"}
+	cfg.setDefaults()
+	if err := cfg.validate(); err != nil {
+		t.Fatalf("expected no error with RawDiskPath set, got: %v", err)
+	}
+}
+
+func TestConfigDefaultsNewFieldsZero(t *testing.T) {
+	// New direct-mode fields default to their zero value — knaller does not
+	// turn on cgroup escape, raw-disk, or netns override unless asked.
+	cfg := &Config{}
+	cfg.setDefaults()
+	if cfg.RootFSSize != 0 {
+		t.Errorf("RootFSSize = %d, want 0", cfg.RootFSSize)
+	}
+	if cfg.RawDiskPath != "" {
+		t.Errorf("RawDiskPath = %q, want empty", cfg.RawDiskPath)
+	}
+	if cfg.Netns != "" {
+		t.Errorf("Netns = %q, want empty", cfg.Netns)
+	}
+	if cfg.EscapeCgroupSlice != "" {
+		t.Errorf("EscapeCgroupSlice = %q, want empty", cfg.EscapeCgroupSlice)
+	}
+}
+
 func TestRandomName(t *testing.T) {
 	name1 := randomName()
 	name2 := randomName()

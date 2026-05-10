@@ -21,7 +21,7 @@ func TestPrepareDisk(t *testing.T) {
 	defer os.Setenv("HOME", origHome)
 
 	name := "test-vm"
-	diskPath, err := prepareDisk(name, baseRootFS)
+	diskPath, err := prepareDisk(name, baseRootFS, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -42,6 +42,34 @@ func TestPrepareDisk(t *testing.T) {
 	}
 }
 
+func TestPrepareDiskRootFSSizeNoGrowthBelowCurrent(t *testing.T) {
+	// When rootFSSize <= current size, prepareDisk must not invoke
+	// e2fsck/resize2fs (which would fail on our non-ext4 fake content).
+	dir := t.TempDir()
+	baseRootFS := filepath.Join(dir, "rootfs.ext4")
+	content := []byte("rootfs content larger than the requested grow target")
+	if err := os.WriteFile(baseRootFS, content, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	origHome := os.Getenv("HOME")
+	os.Setenv("HOME", dir)
+	defer os.Setenv("HOME", origHome)
+
+	// rootFSSize is smaller than current → growth path must be skipped.
+	diskPath, err := prepareDisk("vm-no-grow", baseRootFS, 4)
+	if err != nil {
+		t.Fatalf("prepareDisk with sub-current rootFSSize: %v", err)
+	}
+	st, err := os.Stat(diskPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.Size() != int64(len(content)) {
+		t.Errorf("size = %d, want %d (no growth expected)", st.Size(), len(content))
+	}
+}
+
 func TestRemoveDisk(t *testing.T) {
 	dir := t.TempDir()
 	baseRootFS := filepath.Join(dir, "rootfs.ext4")
@@ -52,7 +80,7 @@ func TestRemoveDisk(t *testing.T) {
 	defer os.Setenv("HOME", origHome)
 
 	name := "test-rm-vm"
-	diskPath, err := prepareDisk(name, baseRootFS)
+	diskPath, err := prepareDisk(name, baseRootFS, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
